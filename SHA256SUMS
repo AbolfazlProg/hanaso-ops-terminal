@@ -8,7 +8,7 @@ d1c9b988f37e796cb41929ce9a4f2f7506bf6fa0c715eeca94a101212c209e00  ./docs/TROUBLE
 65837d985ccec57edfa5ccd2bcb51fa5b2fa996a6c8787d050ff1341ebf112ac  ./gateway/gateway.py
 1bc9e4c49c72c1cf250e04a9583701931150ceb4ecf4537790c56f39fc22c4ce  ./nginx/ops-terminal-internal.conf.template
 973bfeefe83204b6cfa863b3f87d3dac70cdfba1dd9cec6b120f3fdc162e837e  ./nginx/ops-terminal.conf.template
-94dbef7d7712a6b885e083ad8ddc71fb9e7d6d5e09cc912a0a957710e1f5b96f  ./quick-install.sh
+3c6f112a6a41bca0ba6050e83d1e0fe2d25ec9413babee541a679f58f1f5008f  ./quick-install.sh
 81188519e4ca76cef2204e0d646e81e588a67b6b8c25775bff2c841f6463d491  ./scripts/e2e-test.py
 e08f963b9ffef45841eaea138a3ab2700df0fcc08e1106d58fb3437b82cf4378  ./scripts/health-check.sh
 9ca848aa1a53c39869d42ecb2a3539995a4b3ee405726ab3b894f5fe172490ac  ./scripts/install.sh

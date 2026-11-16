@@ -112,16 +112,20 @@ fi
 
 [ -f "$SRC/scripts/install.sh" ] || die "scripts/install.sh missing in the fetched tree"
 
-# ------------------------------------------------- hand stdin back to tty --
-# `curl | bash` feeds this script itself on stdin; the real installer may
-# want to prompt (default is an interactive confirmation). Re-attach stdin
-# to the controlling terminal when one exists, else neutralise it.
-if ( exec 0</dev/tty ) 2>/dev/null; then exec 0</dev/tty; else exec 0</dev/null; fi
+# ------------------------------------------------- stdin for the installer --
+# `curl | bash` feeds THIS script itself on stdin: fd 0 IS our own script
+# source and must NEVER be replaced or closed (an exec 0<... here truncates
+# the script mid-run and bash exits silently). Nothing in this bootstrap may
+# read stdin either. The real installer, however, may prompt (default is an
+# interactive confirmation) — so give the CHILD a clean stdin: the terminal
+# when one exists, /dev/null otherwise.
+STDIN_DEV=/dev/null
+if ( exec 3</dev/tty ) 2>/dev/null; then STDIN_DEV=/dev/tty; fi
 
 # ------------------------------------------------------- run the installer --
 note "starting installer (arguments forwarded verbatim) ..."
 rc=0
-bash "$SRC/scripts/install.sh" "$@" || rc=$?
+bash "$SRC/scripts/install.sh" "$@" < "$STDIN_DEV" || rc=$?
 
 if [ "$rc" -ne 0 ]; then
   KEEP=1
