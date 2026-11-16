@@ -23,18 +23,29 @@ Group=ops-gw
 # The old unit redefined it here with -g 'pid ...;' which made nginx abort at
 # config parse: "pid directive is duplicate in nginx.conf:5".
 #
-# CP11: -e stderr redirects nginx's EARLY error log (opened before the config
-# is parsed) to stderr, which journald captures. Without it nginx tries the
-# compiled-in default /var/log/nginx/error.log — shared-log territory — and as
-# the unprivileged ops-gw user that fails with "could not open error log file
-# ... Permission denied". The post-parse error_log is defined in nginx.conf
-# and points at /var/log/ops-terminal only. No access to shared nginx logs.
+# CP12: the command line carries NO nginx option that is version-dependent.
+# CP11 tried `-e stderr` to redirect the EARLY error log (opened by nginx
+# BEFORE the config is parsed) to stderr/journald — but the -e switch exists
+# only since nginx 1.19.5 (2020-11-24). The production VPS binary predates it
+# (real incident: `nginx: invalid option: "e"`, the unit never started).
+# The command line below therefore works on EVERY nginx build.
+#
+# Early error-log semantics (by design, not a failure):
+#   * BEFORE the config parse nginx opens the compiled-in default path
+#     (/var/log/nginx/error.log on distro builds). As the unprivileged
+#     ops-gw user that open fails — on the VPS with "[alert] could not open
+#     error log file ... Permission denied" — nginx logs that single alert
+#     to stderr (-> journald) and CONTINUES. It is benign by design: the
+#     shared /var/log/nginx directory must stay untouchable for ops-gw.
+#   * AFTER the config parse ALL logging goes to the error_log directive in
+#     nginx.conf — exclusively under /var/log/ops-terminal (ops-gw-owned).
+# The shared nginx and /var/log/nginx permissions are never modified.
 #
 # CP11: daemon off is set in nginx.conf, so the master stays in the
 # foreground and systemd's Type=simple tracks the real main process.
-ExecStartPre=/usr/sbin/nginx -c /etc/ops-terminal/nginx/nginx.conf -e stderr -t
-ExecStart=/usr/sbin/nginx -c /etc/ops-terminal/nginx/nginx.conf -e stderr
-ExecReload=/usr/sbin/nginx -c /etc/ops-terminal/nginx/nginx.conf -e stderr -s reload
+ExecStartPre=/usr/sbin/nginx -c /etc/ops-terminal/nginx/nginx.conf -t
+ExecStart=/usr/sbin/nginx -c /etc/ops-terminal/nginx/nginx.conf
+ExecReload=/usr/sbin/nginx -c /etc/ops-terminal/nginx/nginx.conf -s reload
 
 # CP11: restart ONLY on real failures (never on a clean stop), and give
 # systemd's start-limit above room to trip.

@@ -11,7 +11,7 @@ d93a0130892385f088cb2aa255213890c746b670b0dae88998dd4dd62e0ca338  ./docs/TROUBLE
 3c6f112a6a41bca0ba6050e83d1e0fe2d25ec9413babee541a679f58f1f5008f  ./quick-install.sh
 81188519e4ca76cef2204e0d646e81e588a67b6b8c25775bff2c841f6463d491  ./scripts/e2e-test.py
 e08f963b9ffef45841eaea138a3ab2700df0fcc08e1106d58fb3437b82cf4378  ./scripts/health-check.sh
-507c16b59fa655105ac41bbbf38db67e4a1eb02a7b072e04a8f7d6718842063a  ./scripts/install.sh
+ca9fc22eca0e0ae9bb740bc757c5990c3f99691b5ff7d5ca8cbbcd7c9784587e  ./scripts/install.sh
 c50bc7c72727eee8f2b8f8d311b9bde4de470778f4a376cd200a8d1f55e3cd5f  ./scripts/ops-env.sh
 c08bb843f8afbc0c93346557f5f70e5673b50581bab59eda6efa2aefcf0a2137  ./scripts/ops-haproxy.sh
 a3d6c276eacc7aa35846332030148957c12933acc7c4a9e5886185cb37ee70bd  ./scripts/ops-systemd.sh
@@ -19,14 +19,15 @@ a3d6c276eacc7aa35846332030148957c12933acc7c4a9e5886185cb37ee70bd  ./scripts/ops-
 cd54f8d30281db1466d4da5ad11ab5a436903a031900ad63e4f6ba3f77629d27  ./scripts/preflight.sh
 30b2931456fa0141e4b29643f848680f3ea957c4f435c444c127e6a37a31ac9a  ./scripts/uninstall.sh
 40953f88048e3352113d1ba2540de5a9da2929f3239b17006e6556db7717ea53  ./systemd/ops-terminal-gateway.service
-9753a31c4d5b74b9f576b64aa676b81b6a124f35086fe6f90dfe9e48e59ffc22  ./systemd/ops-terminal-nginx.service
+1deaf4a3c38a167cf98f6be8c31d7f961cb6f3f23520e4350662f4e20292086a  ./systemd/ops-terminal-nginx.service
 3a68dad07c8ab1cde94eae9977ad35c892f4950ab6c096b17cde281ba5378290  ./systemd/ops-terminal.service
 053fef65c53ff589939df4ed1cedd3e74063ef1cefbc1e98ce62fba6166ea6b3  ./tests/SANDBOX_TEST_REPORT.md
 52b5d41e5a0d0cb89823e2d342ced8cef8ce67882d623b143a517f5735da0b0e  ./tests/browser-test.js
 1d5cb723b8c72f55cb41e59f3c477e7d7d856e502573601180971c5795e522f0  ./tests/cp10-battery.sh
-9c8f6771e385e85ad1611669a88ca39f5a5d4d2eb0959245db4f0be5a69a8687  ./tests/cp11-battery.sh
+a4b4ce464596728c53b6357b046d67a3ae88b80e0fc6c18b344a58532ab207ff  ./tests/cp11-battery.sh
 32a9e5faf177a3c6e406dc8328bbbd11fca4a35482fb976181946392c6d6f29a  ./tests/cp11-supervisor.py
 453fca6af58465a88d791e9a00ec2b007672e169a1b863380b5d54c0ba54d36d  ./tests/cp11-systemctl-stub.sh
+1f04060077f1f55d7e64a9dc3c6d1e3d287018613f1d29829f48b516b0b6b0b8  ./tests/cp12-battery.sh
 d989f66a6ee31e71753419e384b55097b1567ed96737e4d6fc1b66a0ca1a8f7d  ./tests/haproxy-battery.sh
 2cfb3914a46c4798cc3b00f882d819908b50ec2275ff2124a699ab87ec67d4a8  ./tests/rootproof.sh
 a87e4f178524627d850e8f9e8f1f538811d4203102eba00bad8cf2d8ec2af3f5  ./tests/run-battery.sh

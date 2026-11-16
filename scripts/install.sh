@@ -619,6 +619,16 @@ if [ "$SANDBOX" != "1" ]; then
     chown -R ops-gw:ops-gw "$INGX_VAR_DIR" 2>/dev/null || true
     chmod 0750 "$INGX_CONF_DIR" "$INGX_VAR_DIR"
   fi
+  # CP12: record the REAL binary identity in the install log. The CP11
+  # incident (`nginx: invalid option: "e"`) was caused by a version-skew
+  # between the tested binary and the production one; the -e switch exists
+  # only since nginx 1.19.5. The unit no longer uses version-dependent
+  # options, but the evidence of what this install actually runs stays in
+  # the log for future diagnostics.
+  if [ "$TOPOLOGY" != "nginx-direct" ]; then
+    NGX_BIN_PROD="$(command -v nginx || echo /usr/sbin/nginx)"
+    note "nginx binary identity: $($NGX_BIN_PROD -V 2>&1 | head -1) [$($NGX_BIN_PROD -V 2>&1 | tail -1 | grep -oE 'error-log-path=[^ ]+' || echo 'error-log-path=(default)')]"
+  fi
   systemctl daemon-reload
 fi
 
@@ -656,10 +666,12 @@ if [ "$SANDBOX" = "1" ]; then
         >> "$VARLOG_DIR/ttyd.log" 2>&1 &
   echo $! > "$RUN_DIR/ttyd.pid"
   if [ "$SANDBOX_TOPOLOGY" = "haproxy" ]; then
-    # mirror of the systemd ExecStart: -e stderr keeps the EARLY error log
-    # (opened before the config parse) away from the compiled-in default
-    # /var/log/nginx/error.log, exactly like the production unit.
-    nohup "$NGINX_BIN" -c "$INGX_CONF_DIR/nginx.conf" -e stderr \
+    # mirror of the systemd ExecStart (CP12): the command line is IDENTICAL to
+    # the unit's — no -e, no -g 'pid …;' — so the sandbox exercises exactly the
+    # production form. The EARLY error log (compiled-in default, opened before
+    # the config parse) fails for an unprivileged identity with a benign
+    # [alert]; all post-parse logging goes to /var/log/ops-terminal only.
+    nohup "$NGINX_BIN" -c "$INGX_CONF_DIR/nginx.conf" \
           >> "$VARLOG_DIR/nginx-internal.log" 2>&1 &
     echo $! > "$RUN_DIR/nginx-internal.pid"
   fi
@@ -1067,7 +1079,7 @@ EOF
     # restart the internal nginx (config gained ssl material) — OUR service only
     if [ "$SANDBOX" = "1" ]; then
       stop_sandbox_svc nginx-internal
-      nohup "$NGINX_BIN" -c "$INGX_CONF_DIR/nginx.conf" -e stderr >> "$VARLOG_DIR/nginx-internal.log" 2>&1 &
+      nohup "$NGINX_BIN" -c "$INGX_CONF_DIR/nginx.conf" >> "$VARLOG_DIR/nginx-internal.log" 2>&1 &
       echo $! > "$RUN_DIR/nginx-internal.pid"
     else
       systemctl restart ops-terminal-nginx.service

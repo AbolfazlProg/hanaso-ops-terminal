@@ -14,7 +14,8 @@
 # Then proves the fixed tree end-to-end:
 #   * systemd-analyze verify of the REAL unit files (systemd 257 parser)
 #   * the exact ExecStart run under the service identity (foreground nginx,
-#     single pid reference, -e stderr early log) listens on 127.0.0.1:7680
+#     single pid reference, CP12: NO version-dependent options) on
+#     127.0.0.1:7680
 #   * unit-policy supervisor (tests/cp11-supervisor.py) executing the REAL
 #     unit files: bounded restarts, start-limit -> failed, controlled restart
 #   * full auth + websocket + browser E2E through the HAProxy edge with the
@@ -317,10 +318,10 @@ chk_has "verify parsed all three units (no missing-unit complaints)" "$REPO/syst
 chk_grep "nginx unit: Restart=on-failure"      "$REPO/systemd/ops-terminal-nginx.service" "^Restart=on-failure$"
 chk_grep "nginx unit: StartLimitIntervalSec"   "$REPO/systemd/ops-terminal-nginx.service" "^StartLimitIntervalSec=120$"
 chk_grep "nginx unit: StartLimitBurst=5"       "$REPO/systemd/ops-terminal-nginx.service" "^StartLimitBurst=5$"
-chk_grep "nginx unit: -e stderr early log"     "$REPO/systemd/ops-terminal-nginx.service" "nginx -c .* -e stderr$"
+chk_not   "nginx unit: NO version-dependent -e switch (CP12: invalid option on nginx <1.19.5)" "$REPO/systemd/ops-terminal-nginx.service" "-e stderr"
 EXEC_G_PIDS="$(grep -E '^Exec(Start|Reload)=' "$REPO/systemd/ops-terminal-nginx.service" | grep -c -- "-g 'pid" || true)"
 chk_eq "nginx unit: NO duplicate -g 'pid …' on Exec lines" "$EXEC_G_PIDS" "0"
-chk_grep "nginx unit: ExecStartPre -t"         "$REPO/systemd/ops-terminal-nginx.service" "ExecStartPre=.*-e stderr -t$"
+chk_grep "nginx unit: ExecStartPre -t"         "$REPO/systemd/ops-terminal-nginx.service" "ExecStartPre=.*-t$"
 chk_grep "nginx unit: ExecReload -s reload"    "$REPO/systemd/ops-terminal-nginx.service" "ExecReload=.*-s reload$"
 EXEC_RL_G="$(grep -E '^ExecReload=' "$REPO/systemd/ops-terminal-nginx.service" | grep -c -- "-g 'pid" || true)"
 chk_eq "nginx unit: ExecReload has no -g" "$EXEC_RL_G" "0"
@@ -438,7 +439,8 @@ systemd-analyze verify "$UNITS_DIR/ops-terminal-nginx.service" > "$VLOG2" 2>&1
 chk_rc $? "systemd-analyze verify of the translated nginx unit (all paths exist here)"
 TR_G_PIDS="$(grep -E '^Exec(Start|Reload)=' "$UNITS_DIR/ops-terminal-nginx.service" | grep -c -- "-g 'pid" || true)"
 chk_eq "translated unit: still NO -g 'pid …' on Exec lines" "$TR_G_PIDS" "0"
-chk_grep "translated unit: ExecStart identity form kept" "$UNITS_DIR/ops-terminal-nginx.service" "nginx -c $SB/etc/ops-terminal/nginx/nginx.conf -e stderr$"
+chk_not   "translated unit: ExecStart identity form kept, still NO -e" "$UNITS_DIR/ops-terminal-nginx.service" "-e stderr"
+chk_grep "translated unit: verbatim ExecStart (CP12 form)" "$UNITS_DIR/ops-terminal-nginx.service" "ExecStart=.*nginx -c .*nginx\.conf$"
 
 # 4b. stop the nohup harness services; bring the panel up under the supervisor
 stop_nohup_services
@@ -526,7 +528,7 @@ fi
 
 # 4h. ExecReload + controlled restart under the unit policy
 $SV reload "$UNITS_DIR/ops-terminal-nginx.service" --state-dir "$SVSTATE" >/dev/null 2>&1
-chk_rc $? "nginx ExecReload (-s reload, -e stderr) succeeded"
+chk_rc $? "nginx ExecReload (-s reload, version-independent form) succeeded"
 MAIN_BEFORE_RELOAD="$NGXMAIN"; sleep 0.5
 MAIN_AFTER_RELOAD="$(sv_state_field ops-terminal-nginx.service MainPID)"
 chk_eq "MainPID unchanged after reload (reload, not restart)" "$MAIN_AFTER_RELOAD" "$MAIN_BEFORE_RELOAD"
