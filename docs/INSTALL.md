@@ -26,6 +26,15 @@ curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/ma
 | `QUICK_INSTALL_REF` | `main` | شاخه یا Tag (مثلاً `v1.0.0`) |
 | `QUICK_INSTALL_SKIP_SHA` | خالی | `1` = رد شدن از راستی‌آزمایی SHA256SUMS (توصیه نمی‌شود) |
 
+**پین‌کردن به نسخه منتشرشده (توصیه‌شده برای VPS)** — به‌جای شاخه `main`، خود URL خام را به Tag پین کنید:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.2.0/quick-install.sh \
+  | bash -s -- --domain ops.hanaso.ir --acme-email admin@hanaso.ir
+```
+
+> نکته: CDN خام (`raw.githubusercontent.com`) تا ~۵ دقیقه بعد از یک Push جدید ممکن است نسخه قبلیِ شاخه `main` را سرو کند؛ URL تگ‌دار همیشه پایدار و تغییرناپذیر است.
+
 > **نکته امنیتی:** `curl | bash` به GitHub و TLS اعتماد می‌کند. برای نصب کاملاً پین‌شده و قابل‌بازبینی، مخزن را Clone کنید، `SHA256SUMS` را خودتان چک کنید و `scripts/install.sh` را مستقیم اجرا کنید (ادامه همین سند).
 
 ## معماری

@@ -1,6 +1,6 @@
 # CURRENT STATE — HANASO OPS Web Terminal
 
-> آخرین به‌روزرسانی: 2026-11-16 — پایان CP7 (پشتیبانی HAProxy + رفع باگ Preflight حادثه 2026-11-16)
+> آخرین به‌روزرسانی: 2026-11-17 — پایان CP8/CP9 (نصب تک‌خطی quick-install + Push کامل CP7/CP8 + Release v1.2.0)
 > این فایل وضعیت واقعی را در هر Checkpoint ثبت می‌کند. هیچ ادعای Push/Deploy بدون تأیید نمی‌شود.
 
 ## مأموریت
@@ -34,6 +34,7 @@ Debian 13 trixie / x86_64 / کاربر uid 1001 بدون root / PID1=tini / ngin
 | D11 | HAProxy: بلوک‌های مدیریت‌شده BEGIN/END + تبدیل برگشت‌پذیر crt→crt-list + فقط `haproxy -c` و reload (هرگز restart) |
 | D12 | فایل env Preflight: سریال‌سازی امن KEY='VALUE' + پارسر سخت‌گیرانه؛ **هرگز source/eval نمی‌شود** (رفع حادثه 2026-11-16) |
 | D13 | nginx داخلی پشت HAProxy: مستقل، loopback-only، `absolute_redirect off` (جلوگیری از ریدایرکت مطلق به پورت داخلی) |
+| D14 | نصب تک‌خطی: بوت‌استرپ `quick-install.sh` (curl \| bash) — کلون مخزن + راستی‌آزمایی fail-closed مانیفست SHA256SUMS + پاس عیناً به Installer رسمی؛ **fd0 هرگز لمس نمی‌شود** (منبعِ خود اسکریپت در حالت curl \| bash) — درس تست واقعی 2026-11-17 |
 
 ## Checkpoints
 
@@ -46,12 +47,15 @@ Debian 13 trixie / x86_64 / کاربر uid 1001 بدون root / PID1=tini / ngin
 | CP5 | تست مرورگر واقعی + باتری کامل + ROOT-proof + هاردنینگ (session revocation و...) | f1e40d0 | ✅ |
 | CP6 | مستندات کامل + SHA256SUMS + Tag v1.0.0 + Installer تست‌شده | e1fb8a1 | ✅ |
 | — | Release (SHA256SUMS + tag v1.0.0) | v1.0.0 | ✅ |
-| CP7 | پشتیبانی HAProxy (3 توپولوژی) + رفع باگ Preflight (پارسر امن) + باتری HAProxy + رگرسیون کامل | v1.1.0 | ✅ Sandbox سبز — در انتظار نصب Production |
+| CP7 | پشتیبانی HAProxy (3 توپولوژی) + رفع باگ Preflight (پارسر امن) + باتری HAProxy + رگرسیون کامل | 08858af (tag v1.1.0) | ✅ Push شده — در انتظار نصب Production |
+| CP8 | نصب تک‌خطی `quick-install.sh` (curl \| bash) + رفع باگ fd0 + مستندسازی | 5e20327 / e5401ab | ✅ Push و تست‌شده |
+| CP9 | Release v1.2.0: CURRENT_STATE + مستندات one-liner تگ‌دار + SHA256SUMS نهایی | v1.2.0 | ✅ Push شده |
 
 ## نتایج آزمون (خلاصه)
 
 - باتری nginx-direct ۱۰ مرحله‌ای: **TOTAL FAILED STEPS: 0** (۴۶ PASS / ۰ FAIL) — `tests/SANDBOX_TEST_REPORT.md`
 - باتری HAProxy ۱۶ مرحله‌ای: **TOTAL FAILED STEPS: 0** (۸۱ PASS / ۰ FAIL) — شامل install، تبدیل برگشت‌پذیر crt→crt-list، e2e کامل از پشت TLS+SNI، مرورگر واقعی، brute-force، XFF spoof-proofing، rollback تحمیلی (شکست e2e بعد از سیم‌کشی HAProxy → بازگشت دقیق)، idempotent reinstall، uninstall و نصب نهایی — `tests/haproxy-battery.sh`
+- نصب تک‌خطی واقعی از GitHub (2026-11-17): `curl -fsSL .../main/quick-install.sh \| bash -s -- --sandbox ...` → clone از github.com (commit e5401ab) → **SHA256SUMS: OK** → نصب کامل + e2e داخلی Installer → health-check **HEALTHY** → uninstall پاک — rc=0. نکته: CDN خام تا ~۵ دقیقه بعد از Push نسخه قبلی را سرو می‌کند؛ برای VPS از URL تگ‌دار (v1.2.0) استفاده کنید.
 - مرورگر واقعی (Playwright) در هر دو توپولوژی: ✅ — متن ترمینال از `window.term` + اثبات فایل side-channel
 - ROOT-proof (userns): `id -u -> 0` از مرورگر واقعی و WS ✅
 - گزارش کامل: `tests/SANDBOX_TEST_REPORT.md`
