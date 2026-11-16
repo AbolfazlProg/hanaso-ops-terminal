@@ -206,8 +206,9 @@ ACTUAL_SHA="$(sha256sum "$VENDORED_TTYD" | awk '{print $1}')"
 note "ttyd 1.7.7 sha256 verified: $ACTUAL_SHA"
 
 # ------------------------------------------------------------ install files --
-for d in "$OPT_DIR/bin" "$OPT_DIR/gateway" "$ETC_DIR" "$VARLIB_DIR" "$VARLOG_DIR" \
-         "$VARTMP_DIR" "$RUN_DIR" "$NGX_DIR"; do
+DIRS=("$OPT_DIR/bin" "$OPT_DIR/gateway" "$ETC_DIR" "$VARLIB_DIR" "$VARLOG_DIR" "$VARTMP_DIR" "$RUN_DIR")
+[ "$SANDBOX" = "1" ] && DIRS+=("$NGX_DIR")
+for d in "${DIRS[@]}"; do
   if [ ! -d "$d" ]; then mkdir -p "$d"; CREATED_PATHS+=("$d"); fi
 done
 install -m 0755 "$VENDORED_TTYD"      "$OPT_DIR/bin/ttyd"
@@ -316,7 +317,7 @@ if [ "$SANDBOX" = "1" ]; then
   TTYD_ENV="TMUX_TMPDIR=$VARTMP_DIR"
   [ -n "$TMUX_LD_PATH" ] && TTYD_ENV="TMUX_TMPDIR=$VARTMP_DIR LD_LIBRARY_PATH=$TMUX_LD_PATH"
   nohup env $TTYD_ENV "$OPT_DIR/bin/ttyd" -i 127.0.0.1 -p "$TTYD_PORT" -W -O -m 2 \
-        -T xterm-256color -t "title=HANASO OPS" -w "$HOME" \
+        -T xterm-256color -w "$HOME" \
         "$TMUX_BIN" new -A -s ops \
         >> "$VARLOG_DIR/ttyd.log" 2>&1 &
   echo $! > "$RUN_DIR/ttyd.pid"
@@ -444,20 +445,29 @@ else
 fi
 
 # ------------------------------------------------------------ end-to-end check --
-note "running end-to-end verification (login -> websocket -> shell)..."
-E2E_ARGS=(--base "https://$DOMAIN" --connect 127.0.0.1 --port "$HTTPS_PORT"
-          --insecure-allow --username "${PANEL_USERNAME:-ops-admin}" --password-stdin)
-if [ "$SANDBOX" = "1" ]; then E2E_ARGS+=(--expect-uid "$(id -u)"); else E2E_ARGS+=(--expect-uid 0); fi
-if printf '%s\n' "${PANEL_PASSWORD:-__UNSET__}" | "$PY_BIN" "$REPO_DIR/scripts/e2e-test.py" "${E2E_ARGS[@]}"; then
-  note "end-to-end verification PASSED"
+if [ -z "${PANEL_PASSWORD:-}" ]; then
+  note "credentials were preserved from a previous install — skipping automated e2e"
+  note "(verify manually: scripts/e2e-test.py --base https://$DOMAIN --username <user> --password-stdin)"
 else
-  cat <<'EOM'
+  note "running end-to-end verification (login -> websocket -> shell)..."
+  E2E_ARGS=(--base "https://$DOMAIN" --connect 127.0.0.1 --port "$HTTPS_PORT"
+            --username "$PANEL_USERNAME" --password-stdin)
+  if [ "$SANDBOX" = "1" ]; then
+    E2E_ARGS+=(--insecure-allow --expect-uid "$(id -u)")
+  else
+    E2E_ARGS+=(--expect-uid 0)
+  fi
+  if printf '%s\n' "$PANEL_PASSWORD" | "$PY_BIN" "$REPO_DIR/scripts/e2e-test.py" "${E2E_ARGS[@]}"; then
+    note "end-to-end verification PASSED"
+  else
+    cat <<'EOM'
 
 [install] END-TO-END VERIFICATION FAILED.
   Rolling back the nginx vhost (services keep running loopback-only).
 EOM
-  rollback
-  exit 1
+    rollback
+    exit 1
+  fi
 fi
 
 # ------------------------------------------------------------ summary --

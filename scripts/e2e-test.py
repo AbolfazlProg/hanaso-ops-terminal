@@ -96,6 +96,7 @@ class WSClient(object):
 
     def handshake(self, expect=101):
         key = base64.b64encode(os.urandom(16)).decode("ascii")
+        host_hdr = self.host if self.port in (80, 443) else "%s:%d" % (self.host, self.port)
         req = ("GET %s HTTP/1.1\r\n"
                "Host: %s\r\n"
                "Upgrade: websocket\r\n"
@@ -106,7 +107,7 @@ class WSClient(object):
                "Origin: %s\r\n"
                "User-Agent: ops-e2e/1.0\r\n"
                "%s"
-               "\r\n") % (self.path, self.host, key, self.origin, self.cookies.header())
+               "\r\n") % (self.path, host_hdr, key, self.origin, self.cookies.header())
         self.sock.sendall(req.encode("ascii"))
         while b"\r\n\r\n" not in self.buf:
             chunk = self.sock.recv(4096)
@@ -276,7 +277,8 @@ def main():
     c = conn()
     c.request("POST", "/login", body=form,
               headers={"Content-Type": "application/x-www-form-urlencoded",
-                       "User-Agent": "ops-e2e"})
+                       "User-Agent": "ops-e2e",
+                       "Cookie": cook_str(jar)})
     r = c.getresponse(); r.read()
     jar.absorb(r)
     c.close()
@@ -325,36 +327,56 @@ def main():
     else:
         bad("no shell output within timeout (last: %r)" % ws.output[-200:])
 
-    def run_cmd(cmd, wait_text, tmo=10):
+    def run_cmd(cmd, tmo=12):
+        """Run cmd; wait until its unique closing marker arrives; return the
+        command output (excluding the echoed command line)."""
+        tag = "@%s@" % os.urandom(4).hex()
         ws.output = ""
-        ws.send_input(cmd + "\n")
-        return ws.wait_for(lambda out: wait_text in out, tmo)
+        ws.send_input("echo %s; %s; echo %s\n" % (tag, cmd, tag))
+        ws.wait_for(lambda out: out.count(tag) >= 4, tmo)
+        lines = ws.output.splitlines()
+        # drop the echoed command line (contains the tag twice)
+        result = []
+        seen_close = 0
+        for line in lines:
+            seen_close += line.count(tag)
+            if seen_close <= 2 and tag in line:
+                continue  # echoed command line
+            result.append(line.replace(tag, ""))
+        return "\n".join(result)
 
     uid = str(args.expect_uid)
-    if run_cmd("id -u", uid + "\n") or \
-       any(l.strip() == uid for l in ws.output.splitlines()):
+    out = run_cmd("id -u")
+    if any(l.strip() == uid for l in out.splitlines()):
         ok("id -u -> %s (expected uid)" % uid)
     else:
-        bad("id -u output: %r" % ws.output[-120:])
+        bad("id -u output: %r" % out[-120:])
 
-    if run_cmd("hostname", "") and any(l.strip() for l in ws.output.splitlines()):
-        ok("hostname -> %r" % [l for l in ws.output.splitlines() if l.strip()][0][:60])
+    out = run_cmd("hostname")
+    import socket as _s
+    hn = _s.gethostname()
+    if hn in out:
+        ok("hostname -> %s" % hn)
     else:
-        bad("hostname produced no output")
+        bad("hostname output does not contain %r: %r" % (hn, out[-120:]))
 
-    if run_cmd("pwd", "") and re.search(r"^/\S+", ws.output, re.M):
-        ok("pwd -> absolute path returned")
+    out = run_cmd("pwd")
+    if re.search(r"^/\S+", out, re.M):
+        ok("pwd -> %s" % [l.strip() for l in out.splitlines() if l.strip().startswith("/")][0][:80])
     else:
-        bad("pwd output: %r" % ws.output[-80:])
+        bad("pwd output: %r" % out[-120:])
 
     marker = "OPSFILE%s" % os.urandom(3).hex()
-    if run_cmd("echo %s > /tmp/ops-e2e.txt && cat /tmp/ops-e2e.txt && rm /tmp/ops-e2e.txt && echo FILEOK" % marker,
-               "FILEOK"):
+    out = run_cmd("echo %s > /tmp/ops-e2e.txt && cat /tmp/ops-e2e.txt && "
+                  "rm /tmp/ops-e2e.txt && echo FILEOK" % marker)
+    if marker in out and "FILEOK" in out:
         ok("file create/read/delete cycle OK (%s)" % marker)
     else:
-        bad("file cycle failed: %r" % ws.output[-120:])
+        bad("file cycle failed: %r" % out[-160:])
 
-    if run_cmd("read -p 'GIVE: ' V; echo \"GOT:$V\"", "GIVE:", 8) or "GIVE:" in ws.output:
+    ws.output = ""
+    ws.send_input("read -p 'GIVE: ' V; echo \"GOT:$V\"\n")
+    if ws.wait_for(lambda out: "GIVE:" in out, 8):
         ws.output = ""
         ws.send_input("interactive77\n")
         if ws.wait_for(lambda out: "GOT:interactive77" in out, 8):

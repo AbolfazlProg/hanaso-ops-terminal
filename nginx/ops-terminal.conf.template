@@ -122,7 +122,9 @@ server {
 
         proxy_pass http://ops_terminal_ttyd;
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
+        # $http_host keeps the original port (e.g. :8443) so ttyd's
+        # --check-origin Host/Origin comparison matches exactly.
+        proxy_set_header Host $http_host;
         proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Forwarded-Host $host;
