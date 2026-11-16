@@ -111,7 +111,11 @@ bash scripts/install.sh --yes
 4. کاربر سیستمی `ops-gw` (بدون shell) برای Gateway و nginx داخلی؛ فقط ttyd با root اجرا می‌شود.
 5. تولید Credential تصادفی ۲۴ کاراکتری (PBKDF2، فایل 0600) + کلید Session مستقل.
 6. سرویس‌های systemd (`ops-terminal-gateway`، `ops-terminal` و در توپولوژی HAProxy `ops-terminal-nginx`) — `enable --now`.
-7. **TLS**: گواهی موجود پوشش‌دهنده → استفاده مجدد؛ وگرنه certbot (HTTP-01 webroot) برای ops.hanaso.ir.
+7. **TLS**: گواهی موجود پوشش‌دهنده → استفاده مجدد (با اعتبارسنجی مجدد در زمان نصب)؛ وگرنه certbot (HTTP-01 webroot) برای ops.hanaso.ir. **مقدار خالی `PREFLIGHT_CERT_PATH=''` (بدون گواهی موجود) یک وضعیت معمولی و معتبر است** — CP10.
+   - مسیر صدور: مسیر مدیریت‌شده ACME روی frontend :80 HAProxy (`use_backend` داخل بلوک `# BEGIN/END ops-terminal acme`) → nginx داخلی → webroot؛ `haproxy -c` + reload قبل از فراخوانی certbot.
+   - پس از صدور: خوانایی cert/key + انقضا ≥ ۲۴ ساعت + پوشش SAN دامنه + تطابق کلید با گواهی بررسی می‌شود؛ در webhook تمدید (renewal deploy hook) PEM مربوط به HAProxy خودکار بازسازی می‌شود.
+   - نصب مجدد (idempotent) مسیر ACME را **بازمی‌سازد** تا renewalهای آینده silently نشکنند.
+   - شکست صدور یا نبود certbot → **TLS GATE**: توقف امن فقط-loopback؛ هیچ بلوکی روی HAProxy باقی نمی‌ماند.
 8. **سیم‌کشی Reverse Proxy** — بر اساس توپولوژی:
    - *nginx-direct*: فایل vhost مستقل + symlink؛ `nginx -t` → فقط **reload**.
    - *haproxy-front*: گواهی پنل به HAProxy (crt-dir / crt-list / تبدیل برگشت‌پذیر crt→crt-list) + بلوک‌های مدیریت‌شده `# BEGIN/END ops-terminal` (ACL SNI/Host + backend با حذف XFF جعلی و HSTS)؛ `haproxy -c` → فقط **reload** (هرگز restart)؛ nginx مشترک HANASO/KOTODAMA دست نمی‌خورد.

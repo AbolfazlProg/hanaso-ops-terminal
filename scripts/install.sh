@@ -50,6 +50,7 @@ note()       { printf '[install] %s\n' "$*"; }
 # ------------------------------------------------------------------ args --
 DOMAIN="ops.hanaso.ir"
 ASSUME_YES=0; SANDBOX=0; SANDBOX_TOPOLOGY="nginx"; SKIP_NGINX=0; RESET_CREDENTIALS=0
+SIMULATE_ACME=0
 HTTP_PORT=80;  HTTPS_PORT=443
 HTTP_PORT_SET=0; HTTPS_PORT_SET=0
 TTYD_PORT=7681; GATEWAY_PORT=7682; PANEL_PORT=7680; SESSION_TTL=8
@@ -64,6 +65,7 @@ while [ $# -gt 0 ]; do
     --yes) ASSUME_YES=1; shift ;;
     --sandbox) SANDBOX=1; HTTP_PORT=8080; HTTPS_PORT=8443; shift ;;
     --sandbox-topology) SANDBOX_TOPOLOGY="$2"; shift 2 ;;
+    --simulate-acme) SIMULATE_ACME=1; shift ;;
     --skip-nginx) SKIP_NGINX=1; shift ;;
     --reset-credentials) RESET_CREDENTIALS=1; shift ;;
     --http-port) HTTP_PORT="$2"; HTTP_PORT_SET=1; shift 2 ;;
@@ -91,6 +93,15 @@ while [ $# -gt 0 ]; do
 done
 [ "$SANDBOX_TOPOLOGY" = "nginx" ] || [ "$SANDBOX_TOPOLOGY" = "haproxy" ] \
   || die "--sandbox-topology must be nginx or haproxy"
+if [ "$SIMULATE_ACME" = "1" ]; then
+  # CP10 battery: run the PRODUCTION certbot issuance branch inside the
+  # sandbox with a stub certbot (tests/stub-certbot.sh). The production code
+  # path below is unchanged; only the entry conditions differ.
+  [ "$SANDBOX" = "1" ] || die "--simulate-acme is sandbox-only (production uses real certbot)"
+  [ "$SANDBOX_TOPOLOGY" = "haproxy" ] || die "--simulate-acme requires --sandbox-topology haproxy"
+  [ -z "$TLS_CERT" ] || die "--simulate-acme conflicts with --tls-cert/--tls-key"
+  [ -n "$CERTBOT_BIN_ARG" ] || die "--simulate-acme requires --certbot-bin (stub certbot)"
+fi
 if [ "$SANDBOX" = "1" ] && [ "$SANDBOX_TOPOLOGY" = "haproxy" ]; then
   # default to the production edge ports; an unprivileged sandbox harness
   # overrides them with high ports (binding 80/443 needs CAP_NET_BIND_SERVICE)
@@ -301,6 +312,21 @@ elif [ "$SANDBOX" = "1" ] && [ "$SANDBOX_TOPOLOGY" = "haproxy" ]; then
   [ "${V:-0}" -ge 2 ] || die "sandbox: haproxy version < 2.0 not supported (got ${V:-unknown})"
   ha_haproxy_check "$HAPROXY_BIN" "$HAPROXY_CFG" \
     || die "sandbox: baseline haproxy -c FAILED on the existing config — refusing to touch it"
+  if [ "$SIMULATE_ACME" = "1" ]; then
+    # CP10 battery: drive the PRODUCTION certbot branch (issue_certificate)
+    # exactly as a real VPS clean install would with preflight reporting
+    # PREFLIGHT_CERT_PATH='' / certbot available / DNS A-record OK.
+    DNS_MATCH=1
+    CERTBOT_BIN="$CERTBOT_BIN_ARG"
+    PREFLIGHT_HAPROXY_HTTP80=1
+    # mirror what preflight detects on a RE-run: the managed acme route
+    if grep -q '^# BEGIN ops-terminal acme' "$HAPROXY_CFG" 2>/dev/null; then
+      PREFLIGHT_HAPROXY_ACME_ROUTED=1
+    else
+      PREFLIGHT_HAPROXY_ACME_ROUTED=0
+    fi
+    note "ACME simulation: DNS_MATCH=1, certbot stub, :80 challenge route managed by the installer"
+  fi
 else
   [ "$(id -u)" = "0" ] || die "run as root (production install)"
   note "running preflight (read-only)..."
@@ -630,9 +656,67 @@ fi
 
 # ------------------------------------------------------------ TLS material --
 PANEL_PEM_SRC_CERT=""; PANEL_PEM_SRC_KEY=""
+LE_LIVE_BASE="${OPS_LE_LIVE_BASE:-/etc/letsencrypt}"   # OPS_LE_LIVE_BASE: sandbox ACME simulation only
+ACME_ROUTE_PRESENT=0
+
+# validate_cert_pair CERT KEY DOMAIN -> 0 when: readable, valid for >= 24h,
+# SAN covers DOMAIN (or its wildcard parent), and the key matches the cert.
+validate_cert_pair() {
+  local cert="$1" key="$2" dom="$3" c k
+  [ -r "$cert" ] && [ -r "$key" ] || { note "cert pair unreadable: $cert / $key"; return 1; }
+  openssl x509 -in "$cert" -noout -checkend 86400 >/dev/null 2>&1 \
+    || { note "certificate expired or expires within 24h: $cert"; return 1; }
+  openssl x509 -in "$cert" -noout -ext subjectAltName 2>/dev/null | tr ',' '\n' \
+    | grep -qi "DNS:${dom}\|DNS:*.${dom#*.}" \
+    || { note "certificate does not cover $dom (SAN): $cert"; return 1; }
+  c="$(openssl x509 -in "$cert" -noout -pubkey 2>/dev/null \
+       | openssl pkey -pubin -outform DER 2>/dev/null | sha256sum | awk '{print $1}')"
+  k="$(openssl pkey -in "$key" -pubout -outform DER 2>/dev/null | sha256sum | awk '{print $1}')"
+  [ -n "$c" ] && [ "$c" = "$k" ] \
+    || { note "certificate and key do not match: $cert / $key"; return 1; }
+  return 0
+}
+
+acme_write_blocks() {
+  # Insert the managed ACME ACL after the :$HTTP_PORT frontend bind and append
+  # the acme backend. Idempotent (skips blocks already present). Callers own
+  # validation/reload: issue_certificate reloads immediately (certbot needs
+  # the live route); the external wiring re-adds blocks after its own
+  # ha_remove_managed pass and validates/reloads once at the end (CP10 fix:
+  # a re-install must NOT silently lose the renewal route).
+  local sec lineno blk
+  if ! grep -q '^# BEGIN ops-terminal acme ' "$HAPROXY_CFG"; then
+    sec="$(ha_find_bind_section "$HAPROXY_CFG" "$HTTP_PORT")" || sec=""
+    [ -n "$sec" ] || return 1
+    lineno="${sec#*|}"; lineno="${lineno%%|*}"
+    blk="$(mktemp)"
+    cat > "$blk" <<EOF
+# BEGIN ops-terminal acme (managed — keep intact; removed by uninstall.sh)
+acl OPS_TERM_ACME path_beg /.well-known/acme-challenge/
+# plain use_backend (frontend-level) — haproxy 2.x/3.x have no
+# 'http-request use-backend' action (caught by haproxy -c in CP10)
+use_backend OPS_TERM_ACME if OPS_TERM_ACME
+# END ops-terminal acme
+EOF
+    ha_insert_after_line "$HAPROXY_CFG" "$lineno" "$blk"; rm -f "$blk"
+  fi
+  if ! grep -q '^# BEGIN ops-terminal acme-backend' "$HAPROXY_CFG"; then
+    cat >> "$HAPROXY_CFG" <<EOF
+# BEGIN ops-terminal acme-backend (managed — keep intact; removed by uninstall.sh)
+backend OPS_TERM_ACME
+    mode http
+    server ops_acme 127.0.0.1:$PANEL_PORT check inter 2s fall 3 rise 2
+# END ops-terminal acme-backend
+EOF
+  fi
+  HAP_TOUCHED=1
+  ACME_ROUTE_PRESENT=1
+  return 0
+}
+
 issue_certificate() {
   # Production certbot issuance through the HAProxy :80 path.
-  # Returns 0 on success and sets PANEL_PEM_SRC_CERT/KEY.
+  # Returns 0 on success and sets PANEL_PEM_SRC_CERT/KEY; fail-closed otherwise.
   if [ -z "$CERTBOT_BIN" ] || [ "$DNS_MATCH" != "1" ]; then
     return 1
   fi
@@ -642,32 +726,15 @@ issue_certificate() {
     # Add a MANAGED acme ACL into the :80 frontend (validated + reload).
     # The internal nginx (already healthy) serves the webroot on 127.0.0.1:$PANEL_PORT.
     [ "${PREFLIGHT_HAPROXY_HTTP80:-0}" = "1" ] || return 1
-    local sec name lineno bindline
-    sec="$(ha_find_bind_section "$HAPROXY_CFG" "$HTTP_PORT")" || sec=""
-    [ -n "$sec" ] || return 1
-    name="${sec%%|*}"; lineno="${sec#*|}"; lineno="${lineno%%|*}"
-    local blk; blk="$(mktemp)"
-    cat > "$blk" <<EOF
-# BEGIN ops-terminal acme (managed — keep intact; removed by uninstall.sh)
-acl OPS_TERM_ACME path_beg /.well-known/acme-challenge/
-http-request use-backend OPS_TERM_ACME if OPS_TERM_ACME
-# END ops-terminal acme
-EOF
-    ha_insert_after_line "$HAPROXY_CFG" "$lineno" "$blk"; rm -f "$blk"
-    cat >> "$HAPROXY_CFG" <<EOF
-# BEGIN ops-terminal acme-backend (managed — keep intact; removed by uninstall.sh)
-backend OPS_TERM_ACME
-    mode http
-    server ops_acme 127.0.0.1:$PANEL_PORT check inter 2s fall 3 rise 2
-# END ops-terminal acme-backend
-EOF
-    HAP_TOUCHED=1
+    acme_write_blocks || return 1
     ha_haproxy_check "$HAPROXY_BIN" "$HAPROXY_CFG" \
       || { haproxy_revert_edits; return 1; }
     haproxy_reload || { haproxy_revert_edits; return 1; }
     HAP_RELOADED=1
     acme_added=1
     note "managed ACME HTTP-01 route added to the :80 frontend (validated + reloaded)"
+  else
+    ACME_ROUTE_PRESENT=1
   fi
   for webroot in "$ACME_WEBROOT" /var/www/html /var/www/letsencrypt; do
     [ -d "$webroot" ] || continue
@@ -679,39 +746,62 @@ EOF
     [ -n "$ACME_EMAIL" ] && ACME_FLAGS="--email $ACME_EMAIL --no-eff-email"
     if "$CERTBOT_BIN" certonly --webroot -w "$webroot" -d "$DOMAIN" \
          --non-interactive --agree-tos $ACME_FLAGS --keep-until-expiring; then
-      PANEL_PEM_SRC_CERT="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
-      PANEL_PEM_SRC_KEY="/etc/letsencrypt/live/$DOMAIN/privkey.pem"
-      # renewal deploy hook keeps the HAProxy PEM fresh
-      if [ "$TOPOLOGY" = "haproxy-front" ]; then
-        DEPLOY_HOOK="/etc/letsencrypt/renewal-hooks/deploy/ops-terminal-haproxy.sh"
-        mkdir -p "$(dirname "$DEPLOY_HOOK")"
-        cat > "$DEPLOY_HOOK" <<EOF
+      PANEL_PEM_SRC_CERT="$LE_LIVE_BASE/live/$DOMAIN/fullchain.pem"
+      PANEL_PEM_SRC_KEY="$LE_LIVE_BASE/live/$DOMAIN/privkey.pem"
+      if validate_cert_pair "$PANEL_PEM_SRC_CERT" "$PANEL_PEM_SRC_KEY" "$DOMAIN"; then
+        # renewal deploy hook keeps the HAProxy PEM fresh (production only)
+        if [ "$SANDBOX" != "1" ] && [ "$TOPOLOGY" = "haproxy-front" ]; then
+          DEPLOY_HOOK="$LE_LIVE_BASE/renewal-hooks/deploy/ops-terminal-haproxy.sh"
+          mkdir -p "$(dirname "$DEPLOY_HOOK")"
+          cat > "$DEPLOY_HOOK" <<EOF
 #!/bin/sh
 # Managed by hanaso-ops-terminal — rebuilds the HAProxy PEM on renewal.
 cat "$PANEL_PEM_SRC_CERT" "$PANEL_PEM_SRC_KEY" > "$HAP_PEM" && \\
   $HAPROXY_BIN -c -f "$HAPROXY_CFG" && (systemctl reload haproxy 2>/dev/null || kill -USR2 \$(cat /run/haproxy.pid) 2>/dev/null)
 EOF
-        chmod 0755 "$DEPLOY_HOOK"
+          chmod 0755 "$DEPLOY_HOOK"
+        fi
+        return 0
       fi
-      [ "$acme_added" = "1" ] || true
-      return 0
+      # CP10: a certbot success whose files are unreadable/expired/domain-
+      # mismatched/key-mismatched must NOT reach HAProxy — fail closed.
+      note "issued certificate FAILED validation — treating issuance as failed (fail-closed)"
+      PANEL_PEM_SRC_CERT=""; PANEL_PEM_SRC_KEY=""
     fi
     [ "$acme_added" = "1" ] && break
   done
   # issuance failed: leave HAProxy exactly as it was
   if [ "$acme_added" = "1" ]; then
     haproxy_revert_edits
-    HAP_TOUCHED=0; HAP_RELOADED=0
+    HAP_TOUCHED=0; HAP_RELOADED=0; ACME_ROUTE_PRESENT=0
   fi
   return 1
 }
 
-if [ "$SANDBOX" = "1" ]; then
+if [ "$SANDBOX" = "1" ] && [ "$SIMULATE_ACME" != "1" ]; then
   [ -n "$TLS_CERT" ] && [ -n "$TLS_KEY" ] \
     || die "--sandbox-topology haproxy requires --tls-cert/--tls-key (test certificate)"
   PANEL_PEM_SRC_CERT="$TLS_CERT"; PANEL_PEM_SRC_KEY="$TLS_KEY"
+  validate_cert_pair "$PANEL_PEM_SRC_CERT" "$PANEL_PEM_SRC_KEY" "$DOMAIN" \
+    || die "provided test certificate failed validation (readable/valid/covers $DOMAIN/matches key)"
   note "sandbox mode: using provided test certificate"
 else
+  # Production selection chain — ALSO runs for --sandbox --simulate-acme
+  # (CP10 battery: the same code path the real VPS takes on a clean install
+  # where preflight reports PREFLIGHT_CERT_PATH='' / OPS_CERT_EXISTS=0).
+  EXISTING_CERT="${EXISTING_CERT:-}"
+  if [ -n "$TLS_CERT" ]; then
+    validate_cert_pair "$TLS_CERT" "$TLS_KEY" "$DOMAIN" \
+      || die "provided certificate failed validation (readable/valid/covers $DOMAIN/matches key)"
+  fi
+  if [ -n "$EXISTING_CERT" ]; then
+    if validate_cert_pair "$EXISTING_CERT" "$(dirname "$EXISTING_CERT")/privkey.pem" "$DOMAIN"; then
+      note "existing certificate validated: $EXISTING_CERT"
+    else
+      note "preflight certificate path failed install-time validation — will try fresh issuance: $EXISTING_CERT"
+      EXISTING_CERT=""
+    fi
+  fi
   if [ -z "$TLS_CERT" ]; then
     if [ -n "$EXISTING_CERT" ] && [ "$TOPOLOGY" != "nginx-direct" ]; then
       PANEL_PEM_SRC_CERT="$EXISTING_CERT"; PANEL_PEM_SRC_KEY="$(dirname "$EXISTING_CERT")/privkey.pem"
@@ -748,8 +838,10 @@ EOM
 EOM
         die "certbot failed (see above)"
       fi
-      TLS_CERT="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
-      TLS_KEY="/etc/letsencrypt/live/$DOMAIN/privkey.pem"
+      TLS_CERT="$LE_LIVE_BASE/live/$DOMAIN/fullchain.pem"
+      TLS_KEY="$LE_LIVE_BASE/live/$DOMAIN/privkey.pem"
+      validate_cert_pair "$TLS_CERT" "$TLS_KEY" "$DOMAIN" \
+        || die "issued certificate failed validation (fail-closed): $TLS_CERT"
     else
       cat <<'EOM'
 
@@ -764,7 +856,17 @@ EOM
       exit 0
     fi
   fi
-  [ -r "$TLS_CERT" ] && [ -r "$TLS_KEY" ] || die "certificate files unreadable"
+  if [ "$TOPOLOGY" = "nginx-direct" ]; then
+    [ -r "$TLS_CERT" ] && [ -r "$TLS_KEY" ] || die "certificate files unreadable"
+  else
+    # CP10 fix: for haproxy topologies the material lives in PANEL_PEM_SRC_*;
+    # the previous check tested TLS_* and would have died even AFTER a
+    # successful issuance (latent bug, never reachable before the parser fix).
+    if [ -z "$PANEL_PEM_SRC_CERT" ] && [ -n "$TLS_CERT" ]; then
+      PANEL_PEM_SRC_CERT="$TLS_CERT"; PANEL_PEM_SRC_KEY="$TLS_KEY"
+    fi
+    [ -r "$PANEL_PEM_SRC_CERT" ] && [ -r "$PANEL_PEM_SRC_KEY" ] || die "certificate files unreadable"
+  fi
 fi
 
 # ------------------------------------------------------------ external wiring --
@@ -958,6 +1060,16 @@ backend OPS_TERM_BACKEND
     server ops_panel 127.0.0.1:$PANEL_PORT check inter 2s fall 3 rise 2
 # END ops-terminal backend
 EOF
+  fi
+
+  # -------- ACME route persistence (CP10 fix) --------
+  # The idempotency pass above removes ALL managed blocks — including the
+  # acme route installed by a PREVIOUS run (or by issuance in THIS run).
+  # Re-add it before the single validated reload, or future Let's Encrypt
+  # renewals would silently stop routing the HTTP-01 challenge.
+  if [ "$ACME_ROUTE_PRESENT" = "1" ] || [ "${PREFLIGHT_HAPROXY_ACME_ROUTED:-0}" = "1" ]; then
+    acme_write_blocks || { rollback; die "could not (re-)add the managed ACME route — reverted"; }
+    note "managed ACME route present on the :80 frontend (renewals keep working)"
   fi
 
   # -------- validate BEFORE reload — always --------

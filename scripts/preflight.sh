@@ -314,6 +314,10 @@ if [ -n "$COVER_CERT" ]; then
   kv PREFLIGHT_HAPROXY_OPS_CERT_EXISTS 1
 else
   info "no existing certificate found that covers $DOMAIN"
+  # CP10: EMPTY values are a NORMAL state here — "no covering certificate
+  # yet" routes install.sh to the certbot issuance branch. The strict parser
+  # accepts empty values for keys whose regex ends in '*' (see ops-env.sh);
+  # non-empty paths are still validated and never weakened.
   kv PREFLIGHT_CERT_PATH ""; kv PREFLIGHT_CERT_KEY ""
   kv PREFLIGHT_HAPROXY_OPS_CERT_EXISTS 0
   if command -v certbot >/dev/null 2>&1; then

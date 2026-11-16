@@ -18,6 +18,13 @@
 #   * A correctly written file is ALSO inert when sourced by a legacy
 #     consumer (quoted shell assignment), but install.sh itself never
 #     sources it.
+#   * EMPTY VALUES: legal for keys whose regex ends in `*` (e.g.
+#     PREFLIGHT_CERT_PATH='' — the "no covering certificate yet" state that
+#     routes install.sh to the certbot issuance branch). The validator
+#     feeds the value to grep WITH a trailing newline so an empty value is
+#     still one (empty) LINE for the anchored regex — an empty stdin would
+#     produce zero lines and grep would reject EVERYTHING (CP10 incident
+#     2026-11-17). Regexes with `+`/literals still reject empty.
 # ==========================================================================
 
 # --------------------------------------------------------------------------
@@ -96,7 +103,10 @@ ops_env_validate() {
     PREFLIGHT_DNS_IPS|PREFLIGHT_HOST_IPS)  re='^([0-9]{1,3}\.){3}[0-9]{1,3}( ([0-9]{1,3}\.){3}[0-9]{1,3})* *$|^(ipv6:)?[0-9A-Fa-f:]*$' ;;
     *) printf '%s\n' "ops-env: unknown key (fail closed): $key" >&2; return 1 ;;
   esac
-  if ! printf '%s' "$val" | grep -qE -- "$re"; then
+  # CP10: append a newline so an EMPTY value is one empty line for grep.
+  # `printf '%s' '' | grep -qE ...` sees ZERO lines and rejects everything,
+  # even patterns whose `*` explicitly allows empty (the CP10 incident).
+  if ! printf '%s\n' "$val" | grep -qE -- "$re"; then
     printf '%s\n' "ops-env: value for $key rejected by validation (re: $re)" >&2
     return 1
   fi
