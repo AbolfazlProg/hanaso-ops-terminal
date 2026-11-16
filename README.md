@@ -1,13 +1,13 @@
 # HANASO OPS Web Terminal
 
 پنل ترمینال تحت وب با **ROOT Shell واقعی** برای VPS مشترک HANASO — پشت احراز هویت مستقل،
-قفل Brute-Force و HTTPS — بدون وابستگی عملیاتی به GitHub Actions، SSH از بیرون یا Cloudflare Tunnel.
+قفل Brute-Force و HTTPS روی Reverse Proxy موجود — بدون وابستگی عملیاتی به GitHub Actions، SSH از Sandbox یا Cloudflare Tunnel.
 
 ```
 مرورگر (Agent/Owner)
    │  HTTPS (wss) — پورت 443 موجود Reverse Proxy
    ▼
-Reverse Proxy فعلی سرور (Virtual Host اختصاصی ops.hanaso.ir)
+nginx فعلی سرور (Virtual Host اختصاصی ops.hanaso.ir)
    │  auth_request → کوکی Session امضاشده
    │  limit_req    → قفل Brute-Force
    ├──► 127.0.0.1:7682  ops-terminal-gateway  (Auth Gateway — Python stdlib، کاربر ops-gw)
@@ -27,17 +27,19 @@ Reverse Proxy فعلی سرور (Virtual Host اختصاصی ops.hanaso.ir)
 | `scripts/preflight.sh` | بررسی سازگاری VPS قبل از نصب (فقط-خواندنی) |
 | `scripts/ops-terminal-passwd` | تولید/چرخش Credential بدون افشا در argv |
 | `scripts/e2e-test.py` | تست انتها-به-انتها: Login → WebSocket → اجرای دستور → Assertion |
-| `docs/` | مستندات نصب/حذف/عیب‌یابی/Rollback/Security |
+| `scripts/health-check.sh` | بررسی سلامت سرویس‌ها + loopback-only |
+| `tests/` | باتری کامل ۱۶ آزمون مأموریت + تست مرورگر واقعی (Playwright) + آزمون ROOT (userns) |
+| `docs/` | مستندات نصب/امنیت/حذف/عیب‌یابی/Rollback |
 
 ## نصب سریع (Owner)
 
- دستور نهایی و تست‌شده در [`docs/INSTALL.md`](docs/INSTALL.md) ارائه شده است.
+دستور نهایی و تست‌شده در [`docs/INSTALL.md`](docs/INSTALL.md) ارائه شده است.
 پیش‌نیاز: رکورد A برای `ops.hanaso.ir` به IP عمومی VPS (حالت DNS Only).
 
-> ⚠️ این پنل ROOT Shell واقعی ارائه می‌کند. امنیت آن به کیفیت Credential، HTTPS و
-> دسترسی محدود بستگی دارد. مستندات [`docs/SECURITY.md`](docs/SECURITY.md) را بخوانید.
+> ⚠️ این پنل ROOT Shell واقعی ارائه می‌کند. [`docs/SECURITY.md`](docs/SECURITY.md) را بخوانید.
 
 ## وضعیت
 
-وضعیت لحظه‌ای پروژه: [`CURRENT_STATE.md`](CURRENT_STATE.md)
-گزارش کامل تست Sandbox: [`tests/SANDBOX_TEST_REPORT.md`](tests/SANDBOX_TEST_REPORT.md)
+- وضعیت لحظه‌ای: [`CURRENT_STATE.md`](CURRENT_STATE.md)
+- گزارش کامل تست Sandbox (۱۶/۱۶ + مرورگر + ROOT): [`tests/SANDBOX_TEST_REPORT.md`](tests/SANDBOX_TEST_REPORT.md)
+- باتری: `bash tests/run-battery.sh` (پس از یک نصب sandbox فعال) — آخرین نتیجه: **0 FAILED**

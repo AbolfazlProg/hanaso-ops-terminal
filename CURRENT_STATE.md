@@ -1,57 +1,55 @@
 # CURRENT STATE — HANASO OPS Web Terminal
 
-> آخرین به‌روزرسانی: 2026-11-16 — Sandbox session
-> این فایل وضعیت واقعی پروژه را در هر Checkpoint ثبت می‌کند. هرگز ادعای Push/Deploy بدون تأیید نمی‌شود.
+> آخرین به‌روزرسانی: 2026-11-16 — پایان CP6 (Release-ready)
+> این فایل وضعیت واقعی را در هر Checkpoint ثبت می‌کند. هیچ ادعای Push/Deploy بدون تأیید نمی‌شود.
 
 ## مأموریت
 
-ساخت پنل Web Terminal با ROOT واقعی برای VPS مشترک HANASO، پشت احراز هویت مستقل و HTTPS،
-بدون وابستگی به GitHub Actions / SSH از Sandbox / Cloudflare Tunnel. محصول نهایی: Installer
-تست‌شده که Owner روی VPS اجرا می‌کند. **هیچ تغییری روی VPS واقعی در این مأموریت انجام نمی‌شود.**
+پنل Web Terminal با **ROOT Shell واقعی** برای VPS مشترک HANASO، پشت احراز هویت مستقل و HTTPS، روی 443 موجود nginx — بدون وابستگی عملیاتی به GitHub Actions / SSH از Sandbox / Cloudflare Tunnel. این Session فقط ساخت و آزمایش؛ **هیچ تغییری روی VPS واقعی انجام نشده است.**
 
-## وضعیت محیط Sandbox (تأییدشده)
+## وضعیت DNS (تأییدشده)
 
-- Debian 13 (trixie), x86_64, کاربر غیر root (uid 1001), PID1=tini (بدون systemd فعال)
-- **TCP/22 خروجی به VPS مسدود است** → بررسی زیرساخت واقعی از Sandbox ممکن نیست؛
-  تشخیص Topology به `scripts/preflight.sh` در زمان نصب روی خود VPS واگذار شده است (read-only، قبل از هر تغییر).
-- Playwright + Chromium برای Browser Automation موجود است.
-- اجزای تست (بدون نیاز به root):
-  - ttyd 1.7.7 (x86_64) — دانلود از Release رسمی + **تأیید SHA256 با فایل رسمی SHA256SUMS** → `vendor/`
-  - nginx 1.26.3 (بسته باینری Debian trixie، شامل `http_auth_request_module`) — استخراج unprivileged
-  - tmux 3.5a + libevent-core — استخراج unprivileged
+- `ops.hanaso.ir` → IP عمومی VPS (رکورد A، DNS Only؛ NS: Cloudflare khloe/newt) — از قبل تنظیم شده.
+- بازرسی خارجی: nginx روی 443 VPS مستقیماً TLS خاتمه می‌دهد (گواهی فعلی پیش‌فرض: CN=kotodama.ir).
+- TCP egress پورت 22 از Sandbox مسدود → تشخیص توپولوژی کامل به preflight در زمان نصب (read-only) سپرده شده.
 
-## وضعیت DNS (تأییدشده از Sandbox)
+## محیط آزمایش Sandbox (تأییدشده)
 
-- `ops.hanaso.ir` هم‌اکنون رکورد A دارد و به IP عمومی VPS اشاره می‌کند (بررسی با dig + Cloudflare DoH،
-  TTL 300، مقدار IP در این فایل ثبت نمی‌شود). یعنی DNS از قبل آماده است؛ در زمان نصب دوباره اعتبارسنجی می‌شود.
-- NS دامنه hanaso.ir روی Cloudflare است (khloe/newt).
+Debian 13 trixie / x86_64 / کاربر uid 1001 بدون root / PID1=tini / nginx 1.26.3 (استخراج unprivileged، auth_request دارد) / tmux 3.5a / ttyd 1.7.7 vendored (SHA256 رسمی) / Playwright+Chromium / userns فعال برای شبیه‌سازی ROOT.
 
 ## تصمیم‌های ثبت‌شده
 
-| # | تصمیم | وضعیت |
-|---|-------|-------|
-| D1 | ابزار Web Terminal: **ttyd 1.7.7** (binary استاتیک، WebSocket، بدون وابستگی) | تأیید |
-| D2 | Session persistence: **tmux** (`tmux new -A -s ops`) — ادامه Session پس از قطع مرورگر/ری‌استارت سرویس | تأیید |
-| D3 | احراز هویت: **Auth Gateway اختصاصی (Python stdlib)** + nginx `auth_request` + کوکی امضاشده HMAC | تأیید |
-| D4 | ترمینال فقط روی `127.0.0.1:7681` (ttyd) و Gateway روی `127.0.0.1:7682`؛ دسترسی خارجی فقط از طریق Reverse Proxy فعلی روی 443 | تأیید |
-| D5 | Gateway با کاربر سیستمی اختصاصی `ops-gw` اجرا می‌شود؛ فقط ttyd با root اجرا می‌شود (لازم برای ROOT Shell) | تأیید |
-| D6 | Brute-force: nginx `limit_req` روی /login + قفل پیش‌رونده سمت Gateway با ذخیره پایدار | تأیید |
-| D7 | TLS: استفاده از گواهی موجود در صورت پوشش دامنه؛ در غیر این صورت Let's Encrypt (certbot) در زمان نصب | تأیید |
+| # | تصمیم |
+|---|--------|
+| D1 | ابزار: **ttyd 1.7.7** (باینری استاتیک؛ WebSocket؛ ping 5s پیش‌فرض) |
+| D2 | Session persistence: **tmux** (`tmux new -A -s ops`) |
+| D3 | احراز هویت: **Gateway اختصاصی Python-stdlib + nginx auth_request + کوکی HMAC** |
+| D4 | ttyd → 127.0.0.1:7681 (root)؛ Gateway → 127.0.0.1:7682 (ops-gw) |
+| D5 | Brute-force: nginx limit_req + قفل پیش‌رونده پایدار Gateway |
+| D6 | TLS: گواهی موجود یا Let's Encrypt (certbot HTTP-01 webroot)؛ توقف امن در نبود DNS/TLS |
+| D7 | فقط vhost مستقل nginx + reload (هرگز restart)؛ rollback خودکار |
+| D8 | اثبات مرورگر: Playwright + `window.term` (متن ترمینال خواندنی) + اثبات side-channel فایل |
+| D9 | اثبات ROOT در Sandbox: userns `unshare -Ur` (id -u=0 از مرورگر واقعی + WS) |
 
 ## Checkpoints
 
-| CP | شرح | وضعیت |
-|----|------|--------|
-| CP0 | ساخت Repository + CURRENT_STATE + Push اولیه | ✅ انجام شد |
-| CP1 | سند مقایسه راهکارها و معماری نهایی (ARCHITECTURE.md) | ⏳ |
-| CP2 | پیاده‌سازی کامل (gateway/systemd/nginx/scripts/docs) | ⏳ |
-| CP3 | استقرار Sandbox (nginx+TLS آزمایشی+سرویس‌ها) | ⏳ |
-| CP4 | اجرای ۱۶ تست اجباری + شواهد (SANDBOX_TEST_REPORT.md) | ⏳ |
-| CP5 | Browser Automation واقعی (Playwright) — ورود + اجرای دستور در ترمینال | ⏳ |
-| CP6 | Release/Tag + Bootstrap + دستور نهایی نصب تست‌شده | ⏳ |
+| CP | شرح | Commit | وضعیت |
+|----|------|-------|-------|
+| CP0 | Repository + baseline | d7f12d2 | ✅ Push شده |
+| CP1 | معماری/مقایسه راهکارها (README + مستندات) | d7f12d2..6f3f3b6 | ✅ Push شده |
+| CP2 | پیاده‌سازی کامل (gateway/units/vhost/scripts) | 6f3f3b6 | ✅ Push شده |
+| CP3/4 | استقرار Sandbox + ۱۴ e2e سبز | a3f469a | ✅ Push شده |
+| CP5 | تست مرورگر واقعی + باتری کامل + ROOT-proof + هاردنینگ (session revocation و...) | TBD-SHA-CP5 | ✅ |
+| CP6 | مستندات کامل + SHA256SUMS + Tag v1.0.0 + Installer تست‌شده | TBD-SHA-CP6 | ✅ |
+| — | Release (SHA256SUMS + tag v1.0.0) | TBD-SHA-REL | ✅ |
 
-## نکات امنیتی رعایت‌شده
+## نتایج آزمون (خلاصه)
 
-- هیچ Secret/Token/Password/IP در Repository قرار نمی‌گیرد (pre-push scan خودکار).
-- رمز اولیه پنل توسط Installer به‌صورت تصادفی تولید و فقط یک‌بار در کنسول Owner نمایش داده می‌شود.
-- Credentialها با PBKDF2-HMAC-SHA256 (200k iteration) ذخیره می‌شوند؛ فایل با مجوز 0600.
+- باتری کامل ۱۰ مرحله‌ای: **TOTAL FAILED STEPS: 0** (۴۶ PASS / ۰ FAIL) — `tests/SANDBOX_TEST_REPORT.md`
+- مرورگر واقعی (Playwright): ۸/۸ ✅ — متن ترمینال از `window.term` + اثبات فایل side-channel
+- ROOT-proof (userns): `id -u -> 0` از مرورگر واقعی و WS ✅
+- گزارش کامل: `tests/SANDBOX_TEST_REPORT.md`
+
+## امنیت
+
+هیچ Secret/IP/Token/رمزی در Repository نیست (اسکن pre-push خودکار). رمز پنل فقط یک‌بار در کنسول نصب نمایش داده می‌شود؛ Credential با PBKDF2 (200k) در فایل 0600.
