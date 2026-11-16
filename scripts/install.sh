@@ -308,8 +308,17 @@ stop_sandbox_svc() {
     rm -f "$RUN_DIR/$f.pid"
   fi
 }
+sandbox_sweep() {
+  # kill ORPHANED processes from previous sandbox runs (paths are unique to this sandbox)
+  pkill -f "$SB_ROOT/opt/ops-terminal/bin/ttyd" 2>/dev/null || true
+  pkill -f "$SB_ROOT/opt/ops-terminal/gateway/gateway.py" 2>/dev/null || true
+  pkill -f "$SB_ROOT/nginx/nginx.conf" 2>/dev/null || true
+  pkill -f "new -A -s ops" 2>/dev/null || true
+  sleep 0.6
+}
 note "starting gateway + ttyd..."
 if [ "$SANDBOX" = "1" ]; then
+  sandbox_sweep
   stop_sandbox_svc gateway; stop_sandbox_svc ttyd
   nohup env OPS_TERMINAL_CONF="$ETC_DIR/env" "$PY_BIN" "$OPT_DIR/gateway/gateway.py" \
         >> "$VARLOG_DIR/gateway-stderr.log" 2>&1 &

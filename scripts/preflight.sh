@@ -110,7 +110,7 @@ case ",$LISTEN443," in
     done
     warn "HAProxy owns :443. Adding the panel needs an HAProxy SNI/host ACL + backend edit"
     warn "HAProxy config: ${HAPROXY_CFG:-not found at default path}"
-    info "installer requires explicit --allow-haproxy-edit for this topology"
+    info "installer will STOP on this topology — send this preflight output to the maintainer for a reviewed HAProxy patch"
     kv PREFLIGHT_HAPROXY_CFG "${HAPROXY_CFG:-}"
     ;;
   *) bad "nothing (or an unknown service) is listening on :443 — cannot add an HTTPS vhost" ;;

@@ -6,8 +6,10 @@
 # Managed file — do not edit manually. Remove via scripts/uninstall.sh
 # ==========================================================================
 
-# Outer brute-force cap on the login endpoint (http{} context zone)
-limit_req_zone $binary_remote_addr zone=ops_login:10m rate=12r/m;
+# Outer brute-force cap on the login endpoint (http{} context zone).
+# rate 24r/m + burst 12 allows a normal operator login flow (page+POST) while
+# capping scripted guessing; the gateway then locks an IP after 5 failures.
+limit_req_zone $binary_remote_addr zone=ops_login:10m rate=24r/m;
 
 # WebSocket upgrade map. The result variable name is unique to avoid
 # colliding with any map already present in the shared nginx config.
@@ -69,7 +71,7 @@ server {
 
     # ---- public: login page (rate-limited) + health ---------------------
     location = /login {
-        limit_req zone=ops_login burst=6 nodelay;
+        limit_req zone=ops_login burst=12 nodelay;
         limit_req_status 429;
         proxy_pass http://ops_terminal_gateway;
         proxy_set_header Host $host;

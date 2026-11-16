@@ -62,6 +62,11 @@ if [ "$SANDBOX" = "1" ]; then
       rm -f "$RUN_DIR/$f.pid"
     fi
   done
+  # sweep orphans from previous runs (unique sandbox paths)
+  pkill -f "$SB_ROOT/opt/ops-terminal/bin/ttyd" 2>/dev/null || true
+  pkill -f "$SB_ROOT/opt/ops-terminal/gateway/gateway.py" 2>/dev/null || true
+  pkill -f "$SB_ROOT/nginx/nginx.conf" 2>/dev/null || true
+  pkill -f "new -A -s ops" 2>/dev/null || true
   if [ -f "$RUN_DIR/nginx.pid" ] && [ -n "$NGINX_BIN" ]; then
     note "stopping sandbox nginx harness"
     "$NGINX_BIN" -c "$NGX_DIR/nginx.conf" -s stop 2>/dev/null || kill "$(cat "$RUN_DIR/nginx.pid")" 2>/dev/null || true

@@ -225,8 +225,9 @@ def make_token(cfg, username, key_version):
     return b64u(payload) + "." + b64u(sig)
 
 
-def check_token(cfg, token):
-    """Returns dict payload or None."""
+def check_token(cfg, token, revoked=None):
+    """Returns dict payload or None. `revoked` is an optional dict of
+    {jti: expiry_ts} from the persistent state (server-side logout)."""
     if not token or token.count(".") != 1:
         return None
     payload_b64, sig_b64 = token.split(".", 1)
@@ -249,6 +250,10 @@ def check_token(cfg, token):
         return None
     if int(data.get("e", 0)) < time.time():
         return None
+    if revoked is not None:
+        jti = data.get("j", "")
+        if jti and jti in revoked and int(revoked[jti]) > time.time():
+            return None
     return data
 
 
@@ -259,7 +264,7 @@ class StateStore(object):
     def __init__(self, path):
         self.path = path
         self.lock = threading.Lock()
-        self.data = {"fail_counts": {}, "locked_until": {}}
+        self.data = {"fail_counts": {}, "locked_until": {}, "revoked": {}}
         self._load()
 
     def _load(self):
@@ -267,7 +272,9 @@ class StateStore(object):
             with open(self.path, "r", encoding="utf-8") as fh:
                 d = json.load(fh)
             if isinstance(d.get("fail_counts"), dict) and isinstance(d.get("locked_until"), dict):
-                self.data = d
+                self.data = {"fail_counts": d.get("fail_counts", {}),
+                             "locked_until": d.get("locked_until", {}),
+                             "revoked": d.get("revoked", {}) if isinstance(d.get("revoked"), dict) else {}}
         except Exception:
             pass
 
@@ -306,6 +313,17 @@ class StateStore(object):
             self.data["fail_counts"].pop(ip, None)
             self._save()
 
+    def revoke(self, jti, expires_ts):
+        """Server-side session revocation (logout). Persisted."""
+        with self.lock:
+            self.data["revoked"][jti] = int(expires_ts)
+            self._prune()
+            self._save()
+
+    def revoked_map(self):
+        with self.lock:
+            return dict(self.data["revoked"])
+
     def _prune(self):
         now = time.time()
         fc = {}
@@ -316,7 +334,11 @@ class StateStore(object):
         for ip, until in self.data["locked_until"].items():
             if until > now:
                 lu[ip] = until
-        self.data = {"fail_counts": fc, "locked_until": lu}
+        rv = {}
+        for jti, exp in self.data.get("revoked", {}).items():
+            if exp > now:
+                rv[jti] = exp
+        self.data = {"fail_counts": fc, "locked_until": lu, "revoked": rv}
 
 
 # --------------------------------------------------------------------------- #
@@ -413,7 +435,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         for k, v in (extra_headers or {}).items():
             self.send_header(k, v)
         self.end_headers()
-        self.wfile.write(payload)
+        if self.command != "HEAD":
+            self.wfile.write(payload)
 
     def send_text(self, code, text, ctype="text/plain; charset=utf-8"):
         payload = text.encode("utf-8")
@@ -422,7 +445,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(payload)
+        if self.command != "HEAD":
+            self.wfile.write(payload)
 
     def redirect(self, location, set_cookies=None):
         self.send_response(302)
@@ -443,7 +467,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
         return None
 
     def session(self):
-        return check_token(self.cfg, self.cookie_val(SESSION_COOKIE))
+        return check_token(self.cfg, self.cookie_val(SESSION_COOKIE),
+                           revoked=self.state.revoked_map() if self.state else None)
 
     def new_session_cookie(self, username):
         cred = load_credentials(self.cfg) or {}
@@ -487,6 +512,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
     # ---- routing ---------------------------------------------------------- #
     def route(self, method):
         try:
+            if method == "HEAD":
+                method = "GET"  # headers-only variant of GET (curl -I etc.)
             path = self.path.split("?", 1)[0]
             if path == "/health":
                 return self.send_text(200, "ok: ops-terminal-gateway %s\n" % VERSION)
@@ -528,6 +555,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.route("GET")
 
+    def do_HEAD(self):
+        self.route("HEAD")
+
     def do_POST(self):
         self.route("POST")
 
@@ -543,6 +573,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def handle_login_post(self):
         cfg, state = self.cfg, self.state
         ip = self.client_ip()
+        # ALWAYS drain the request body first: leaving unread bytes on a
+        # keep-alive upstream connection desyncs the next request (nginx
+        # upstream keepalive would see the leftovers as a request line).
+        form = self.read_form()
         proto = self.headers.get("X-Forwarded-Proto", "")
         if proto and proto != "https":
             return self.send_text(400, "login must go over https\n")
@@ -556,7 +590,6 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return self.render("قفل موقت — HANASO OPS", "تلاش ناموفق", body, code=423,
                                extra_headers={"Set-Cookie": self.csrf_cookie(nonce)})
 
-        form = self.read_form()
         if not self.csrf_ok(form):
             return self.send_text(400, "bad request\n")
         username = form.get("username", "")
@@ -591,11 +624,17 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     extra_headers={"Set-Cookie": self.csrf_cookie(nonce)})
 
     def handle_logout_post(self):
-        sess = self.session()
+        # drain body first (keep-alive safety, see handle_login_post)
         form = self.read_form()
-        if sess and self.csrf_ok(form):
-            log_event(self.cfg.log_file, "LOGOUT", ip=self.client_ip(), user=sess.get("u"),
-                      session=sess.get("j"))
+        sess = self.session()
+        if not sess:
+            return self.redirect("/login", set_cookies=[self.clear_session_cookie()])
+        if not self.csrf_ok(form):
+            return self.send_text(400, "bad request\n")
+        # server-side revocation: the token itself becomes unusable
+        self.state.revoke(sess.get("j", ""), int(sess.get("e", 0)))
+        log_event(self.cfg.log_file, "LOGOUT", ip=self.client_ip(), user=sess.get("u"),
+                  session=sess.get("j"))
         self.redirect("/login", set_cookies=[self.clear_session_cookie()])
 
     def handle_chpass_page(self):
@@ -609,10 +648,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def handle_chpass_post(self):
         cfg = self.cfg
+        # drain body first (keep-alive safety, see handle_login_post)
+        form = self.read_form()
         sess = self.session()
         if not sess:
             return self.redirect("/login")
-        form = self.read_form()
         if not self.csrf_ok(form):
             return self.send_text(400, "bad request\n")
         current = form.get("current", "")
