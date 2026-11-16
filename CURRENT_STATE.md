@@ -62,7 +62,7 @@ Debian 13 trixie / x86_64 / کاربر uid 1001 بدون root / PID1=tini / ngin
 | CP9 | Release v1.2.0: CURRENT_STATE + مستندات one-liner تگ‌دار + SHA256SUMS نهایی | v1.2.0 | ✅ Push شده |
 | CP10 | HOTFIX: پذیرش `PREFLIGHT_CERT_PATH=''` + شاخه صدور certbot واقعی + مسیر ACME صحیح + بازسازی مسیر ACME در reinstall + اعتبارسنجی جفت گواهی + باتری CP10 (سناریوی دقیق VPS) | tag v1.2.1 | ✅ تست و Push شده — در انتظار نصب Production |
 | CP11 | HOTFIX Systemd/Nginx: PID یکتا + `daemon off` + سیاست Restart محدود + مالکیت پوشه‌ها + rollback قطع‌کننده حلقه + باتری CP11 | f437c4d (tag v1.2.2) | ✅ Push شده — `-e stderr` آن روی باینری واقعی VPS می‌مرد → CP12 |
-| CP12 | FIX نهایی سازگاری systemd/nginx: حذف `-e stderr` از unit و Installer (D21) + ثبت هویت باینری nginx در لاگ نصب (D24) + باتری CP12 (ماتریس باینری + اجرای verbatim روی Ubuntu 1.18.0 + تراکنش واقعی systemd + ۱۱ گام پذیرش + rollback + leftover-reinstall + quick-install واقعی) | 5d1ae01 (tag v1.2.3) | ✅ تست‌شده (۱۰۱ PASS + رگرسیون‌ها سبز) — Push شده |
+| CP12 | FIX نهایی سازگاری systemd/nginx: حذف `-e stderr` از unit و Installer (D21) + ثبت هویت باینری nginx در لاگ نصب (D24) + باتری CP12 (ماتریس باینری + اجرای verbatim روی Ubuntu 1.18.0 + تراکنش واقعی systemd + ۱۱ گام پذیرش + rollback + leftover-reinstall + quick-install واقعی) | 8351927 (tag v1.2.3) | ✅ ۱۰۱ PASS + رگرسیون‌ها سبز + نصب واقعی تک‌خطی از تگ GitHub (SHA OK، e2E، uninstall پاک) — Push شده |
 
 ## نتایج آزمون (خلاصه)
 
