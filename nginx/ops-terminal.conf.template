@@ -1,0 +1,142 @@
+# ==========================================================================
+# HANASO OPS Web Terminal — nginx virtual host (TEMPLATE — rendered by
+# scripts/install.sh). Placeholders: {{OPS_DOMAIN}} {{TLS_CERT}} {{TLS_KEY}}
+# {{LISTEN_HTTP}} {{LISTEN_HTTPS}} {{LISTEN_HTTP_V6}} {{LISTEN_HTTPS_V6}}
+# {{GATEWAY_PORT}} {{TTYD_PORT}} {{NGINX_LOG_PREFIX}}
+# Managed file — do not edit manually. Remove via scripts/uninstall.sh
+# ==========================================================================
+
+# Outer brute-force cap on the login endpoint (http{} context zone)
+limit_req_zone $binary_remote_addr zone=ops_login:10m rate=12r/m;
+
+# WebSocket upgrade map. The result variable name is unique to avoid
+# colliding with any map already present in the shared nginx config.
+map $http_upgrade $ops_connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+upstream ops_terminal_gateway {
+    server 127.0.0.1:{{GATEWAY_PORT}};
+    keepalive 8;
+}
+
+upstream ops_terminal_ttyd {
+    server 127.0.0.1:{{TTYD_PORT}};
+    keepalive 4;
+}
+
+# access log format WITHOUT query strings (never logs tokens/secrets in URLs)
+log_format ops_terminal '$remote_addr [$time_local] "$request_method $uri" $status '
+                        '$body_bytes_sent "$http_user_agent" rt=$request_time';
+
+server {
+    listen {{LISTEN_HTTP}};
+    {{LISTEN_HTTP_V6}}
+    server_name {{OPS_DOMAIN}};
+
+    # ACME HTTP-01 webroot (certbot issuance/renewal)
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+        default_type "text/plain";
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen {{LISTEN_HTTPS}} ssl;
+    {{LISTEN_HTTPS_V6}}
+    server_name {{OPS_DOMAIN}};
+
+    ssl_certificate     {{TLS_CERT}};
+    ssl_certificate_key {{TLS_KEY}};
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_session_cache   shared:OpsTerminalTLS:5m;
+    ssl_session_timeout 1h;
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    access_log {{NGINX_LOG_PREFIX}}access.log ops_terminal;
+    error_log  {{NGINX_LOG_PREFIX}}error.log warn;
+
+    client_max_body_size 1m;
+
+    # ---- public: login page (rate-limited) + health ---------------------
+    location = /login {
+        limit_req zone=ops_login burst=6 nodelay;
+        limit_req_status 429;
+        proxy_pass http://ops_terminal_gateway;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+
+    location = /health {
+        proxy_pass http://ops_terminal_gateway;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        access_log off;
+    }
+
+    # ---- internal auth subrequest used by auth_request -------------------
+    location = /_ops_auth {
+        internal;
+        proxy_pass http://ops_terminal_gateway/auth-check;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+
+    # ---- authenticated account endpoints (gateway) -----------------------
+    location ~ ^/(logout|change-password|whoami)$ {
+        auth_request /_ops_auth;
+        error_page 401 = @ops_to_login;
+        error_page 403 = @ops_to_login;
+        proxy_pass http://ops_terminal_gateway;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+
+    # ---- the terminal itself (ttyd: pages + WebSocket) -------------------
+    location / {
+        auth_request /_ops_auth;
+        error_page 401 = @ops_to_login;
+        error_page 403 = @ops_to_login;
+
+        proxy_pass http://ops_terminal_ttyd;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $ops_connection_upgrade;
+        # long-lived interactive sessions
+        proxy_read_timeout 7d;
+        proxy_send_timeout 7d;
+        proxy_buffering off;
+        proxy_request_buffering off;
+    }
+
+    location @ops_to_login {
+        return 302 /login;
+    }
+}
+# ====================== end HANASO OPS Web Terminal =======================

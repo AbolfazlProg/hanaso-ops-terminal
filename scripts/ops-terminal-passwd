@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# ==========================================================================
+# ops-terminal-passwd — credential management for HANASO OPS Web Terminal
+# Passwords are NEVER passed as command-line arguments (no argv/process leak).
+#
+# Usage:
+#   ops-terminal passwd                    interactive rotation (prompts twice)
+#   ops-terminal passwd --generate         new random 24-char password (prints once)
+#   ops-terminal passwd --rotate-session-key
+#   ops-terminal verify                    interactive verification (exit code)
+#   ops-terminal service                   run the gateway in the foreground (systemd does this)
+# ==========================================================================
+set -euo pipefail
+CONF="${OPS_TERMINAL_CONF:-/etc/ops-terminal/env}"
+PY="${OPS_PYTHON:-/usr/bin/python3}"
+GW="/opt/ops-terminal/gateway/gateway.py"
+[ -x "$GW" ] || GW="$(dirname "$(readlink -f "$0")")/../gateway/gateway.py"
+[ -r "$CONF" ] || { echo "config not found: $CONF" >&2; exit 1; }
+[ "$#" -eq 0 ] && set -- passwd
+exec env OPS_TERMINAL_CONF="$CONF" "$PY" "$GW" "$@"
