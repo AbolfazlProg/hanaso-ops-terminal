@@ -47,6 +47,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=ops-haproxy.sh
 [ -r "$SCRIPT_DIR/ops-haproxy.sh" ] && . "$SCRIPT_DIR/ops-haproxy.sh" \
   || die "scripts/ops-haproxy.sh missing next to uninstall.sh"
+# shellcheck source=ops-systemd.sh
+[ -r "$SCRIPT_DIR/ops-systemd.sh" ] && . "$SCRIPT_DIR/ops-systemd.sh" \
+  || die "scripts/ops-systemd.sh missing next to uninstall.sh"
 
 if [ "$SANDBOX" = "1" ]; then
   SB_ROOT="${OPS_SANDBOX_ROOT:-$HOME/ops-sandbox}"
@@ -126,9 +129,8 @@ if [ "$SANDBOX" = "1" ]; then
     "$NGINX_BIN" -c "$NGX_DIR/nginx.conf" -s stop 2>/dev/null || kill "$(cat "$RUN_DIR/nginx.pid")" 2>/dev/null || true
   fi
 else
-  note "stopping + disabling systemd services"
-  systemctl disable --now ops-terminal.service ops-terminal-gateway.service \
-                     ops-terminal-nginx.service 2>/dev/null || true
+  note "stopping + disabling systemd services (restart loop broken, failed state cleared)"
+  systemd_stop_panel_units
 fi
 
 # --- 1b. revert HAProxy edits (managed blocks + reversible bind conversion) --

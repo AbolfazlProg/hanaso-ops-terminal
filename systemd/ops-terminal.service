@@ -5,6 +5,11 @@ After=network-online.target ops-terminal-gateway.service
 Wants=network-online.target
 Requires=ops-terminal-gateway.service
 
+# CP11: bound restart policy — see ops-terminal-nginx.service. Restart only
+# on real failures; after 5 failures inside 120s the unit stays DOWN.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
 [Service]
 Type=simple
 # This service intentionally runs as ROOT: its entire purpose is a real root shell.
@@ -15,8 +20,10 @@ Type=simple
 ExecStart=/opt/ops-terminal/bin/ttyd -i 127.0.0.1 -p 7681 -W -O -m 2 -T xterm-256color -t "title=HANASO OPS" -w /root /usr/bin/tmux new -A -s ops
 Environment=TMUX_TMPDIR=/var/tmp/ops-terminal
 ExecStartPre=/usr/bin/install -d -m 700 -o root -g root /var/tmp/ops-terminal
-Restart=always
-RestartSec=2
+# CP11: on-failure only — a clean stop (or a rollback stop) must not be
+# undone by an automatic restart; a real crash restarts after 3s.
+Restart=on-failure
+RestartSec=3
 # KillMode=process: on stop/restart only the ttyd main process is signaled; the
 # detached tmux server — and the running root session inside it — survives and
 # is re-attached automatically on the next start (tmux new -A -s ops).

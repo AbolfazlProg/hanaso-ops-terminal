@@ -4,6 +4,14 @@ Documentation=https://github.com/AbolfazlProg/hanaso-ops-terminal
 After=network-online.target ops-terminal-gateway.service
 Wants=network-online.target
 
+# CP11: bound restart policy. A real failure restarts (on-failure), but a
+# persistently broken unit is STOPPED after 5 attempts inside 120s instead of
+# looping forever (production incident: restart counter reached 972 with
+# Restart=always and no start limit). After the limit, systemd marks the unit
+# failed and leaves it down until an operator (or the installer) intervenes.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
 [Service]
 Type=simple
 # Independent nginx instance (NOT the shared nginx of HANASO/KOTODAMA).
@@ -11,10 +19,27 @@ Type=simple
 # traffic source is the HAProxy backend for the ops.hanaso.ir SNI/host ACL.
 User=ops-gw
 Group=ops-gw
-ExecStart=/usr/sbin/nginx -c /etc/ops-terminal/nginx/nginx.conf -g 'pid /var/lib/ops-terminal/nginx/nginx.pid;'
-ExecReload=/usr/sbin/nginx -c /etc/ops-terminal/nginx/nginx.conf -g 'pid /var/lib/ops-terminal/nginx/nginx.pid;' -s reload
-Restart=always
-RestartSec=2
+# CP11: the PID file is defined EXACTLY ONCE — in nginx.conf (pid directive).
+# The old unit redefined it here with -g 'pid ...;' which made nginx abort at
+# config parse: "pid directive is duplicate in nginx.conf:5".
+#
+# CP11: -e stderr redirects nginx's EARLY error log (opened before the config
+# is parsed) to stderr, which journald captures. Without it nginx tries the
+# compiled-in default /var/log/nginx/error.log — shared-log territory — and as
+# the unprivileged ops-gw user that fails with "could not open error log file
+# ... Permission denied". The post-parse error_log is defined in nginx.conf
+# and points at /var/log/ops-terminal only. No access to shared nginx logs.
+#
+# CP11: daemon off is set in nginx.conf, so the master stays in the
+# foreground and systemd's Type=simple tracks the real main process.
+ExecStartPre=/usr/sbin/nginx -c /etc/ops-terminal/nginx/nginx.conf -e stderr -t
+ExecStart=/usr/sbin/nginx -c /etc/ops-terminal/nginx/nginx.conf -e stderr
+ExecReload=/usr/sbin/nginx -c /etc/ops-terminal/nginx/nginx.conf -e stderr -s reload
+
+# CP11: restart ONLY on real failures (never on a clean stop), and give
+# systemd's start-limit above room to trip.
+Restart=on-failure
+RestartSec=3
 
 # --- hardening (non-root, no shell) ---
 NoNewPrivileges=yes

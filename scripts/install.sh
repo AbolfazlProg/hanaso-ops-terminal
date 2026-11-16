@@ -44,7 +44,7 @@
 # ==========================================================================
 set -Eeuo pipefail
 
-die()        { printf '\n[install][FATAL] %s\n' "$*" >&2; exit 1; }
+die()        { printf '\n[install][FATAL] %s\n' "$*" >&2; if [ "${CHANGES_BEGUN:-0}" = "1" ]; then rollback; fi; exit 1; }
 note()       { printf '[install] %s\n' "$*"; }
 
 # ------------------------------------------------------------------ args --
@@ -117,6 +117,8 @@ SCRIPT_DIR="$REPO_DIR/scripts"
 . "$SCRIPT_DIR/ops-env.sh"      || die "scripts/ops-env.sh missing"
 # shellcheck source=ops-haproxy.sh
 . "$SCRIPT_DIR/ops-haproxy.sh"  || die "scripts/ops-haproxy.sh missing"
+# shellcheck source=ops-systemd.sh
+. "$SCRIPT_DIR/ops-systemd.sh"  || die "scripts/ops-systemd.sh missing"
 
 # ------------------------------------------------------------- path layout --
 TS="$(date +%Y%m%d-%H%M%S)"
@@ -161,6 +163,12 @@ INGX_VAR_DIR="$VARLIB_DIR/nginx"               # its pid/temp
 INGX_TLS_DIR="$INGX_CONF_DIR/tls"              # passthrough topology cert copy
 
 # ------------------------------------------------------------- rollback state --
+# CHANGES_BEGUN: set right before the FIRST mutating action (backup snapshot).
+# Every die() after that point triggers a full rollback of this panel's own
+# changes (CP11: the production incident had a late die() exit WITHOUT any
+# rollback — the gateway and the ttyd root shell stayed active and the nginx
+# unit kept crash-looping).
+CHANGES_BEGUN=0; ROLLED_BACK=0
 CREATED_USER=0; NGINX_TOUCHED=0; NGINX_RELOADED=0; SERVICES_STARTED=0
 HAP_TOUCHED=0; HAP_RELOADED=0; HAP_BIND_EDITED=0; HAP_PEM_CREATED=0
 HAP_CRTLIST_CREATED=0; CRT_STYLE=""; CRT_PATH_BIND=""; HAP_RELOAD_MODE="pidfile"
@@ -172,7 +180,7 @@ haproxy_revert_edits() {
   # config, so it works both for a first-install failure AND for a
   # re-install running over an earlier conversion (the current run's
   # HAP_* metadata alone cannot describe that state).
-  local removed=0 lst orig_crt crt_dir
+  local removed=0 lst orig_crt crt_dir need_reload=0
   if [ -f "$HAPROXY_CFG" ]; then
     removed="$(ha_remove_managed "$HAPROXY_CFG")"
     # (a) OUR reversible conversion: bind crt-list $CRTLIST -> crt <original>
@@ -202,7 +210,13 @@ haproxy_revert_edits() {
     [ -n "${DEPLOY_HOOK:-}" ] && rm -f "$DEPLOY_HOOK"
   fi
   printf '[install][ROLLBACK] removed %s managed HAProxy block(s) from %s\n' "$removed" "${HAPROXY_CFG:-?}" >&2
-  if [ "$HAP_RELOADED" = "1" ] && [ -f "$HAPROXY_CFG" ]; then
+  # CP11: reload whenever we actually removed something from the shared
+  # config — even if THIS run never reloaded (a leftover managed block from
+  # an older crashed run must not keep its route live after a rollback).
+  # The reload is validated and is never a restart.
+  if [ "$HAP_RELOADED" = "1" ]; then need_reload=1; fi
+  if [ "${removed:-0}" -gt 0 ] 2>/dev/null && [ -n "$HAPROXY_BIN" ]; then need_reload=1; fi
+  if [ "$need_reload" = "1" ] && [ -f "$HAPROXY_CFG" ]; then
     if ha_haproxy_check "$HAPROXY_BIN" "$HAPROXY_CFG"; then
       haproxy_reload || true
     else
@@ -238,6 +252,8 @@ haproxy_reload() {
 
 rollback() {
   trap - ERR   # never re-enter this rollback from a nested command failure
+  if [ "${ROLLED_BACK:-0}" = "1" ]; then return 0; fi
+  ROLLED_BACK=1
   printf '\n[install][ROLLBACK] reverting changes after failure...\n' >&2
   set +e
   if [ "$SANDBOX" = "1" ]; then
@@ -258,14 +274,23 @@ rollback() {
       sleep 0.4
     done
   else
-    systemctl disable --now ops-terminal.service ops-terminal-gateway.service \
-                       ops-terminal-nginx.service 2>/dev/null
-    rm -f "$SYSTEMD_DIR/ops-terminal.service" "$SYSTEMD_DIR/ops-terminal-gateway.service" \
-          "$SYSTEMD_DIR/ops-terminal-nginx.service"
-    systemctl daemon-reload 2>/dev/null
+    # CP11: stop ONLY this panel's units, break any restart loop, clear the
+    # failed state, and remove the unit files (scripts/ops-systemd.sh — the
+    # shared nginx/haproxy of HANASO/KOTODAMA is never touched here).
+    systemd_stop_panel_units
+    if systemd_panel_units_stopped; then
+      printf '[install][ROLLBACK] all ops-terminal units stopped (no restart loop left)\n' >&2
+    else
+      printf '[install][ROLLBACK][WARN] an ops-terminal unit is STILL active after the stop sweep\n' >&2
+    fi
   fi
-  if [ "$HAP_TOUCHED" = "1" ]; then
-    haproxy_revert_edits
+  if [ -n "${HAPROXY_CFG:-}" ] && [ -f "$HAPROXY_CFG" ]; then
+    # CP11: sweep managed leftovers state-independently — our own route must
+    # never survive a failed install, even if this run never touched haproxy
+    # (a previous crashed run may have left managed blocks behind).
+    if [ "$HAP_TOUCHED" = "1" ] || grep -q '^# BEGIN ops-terminal' "$HAPROXY_CFG" 2>/dev/null; then
+      haproxy_revert_edits
+    fi
   fi
   if [ "$NGINX_TOUCHED" = "1" ] && [ "$NGINX_RELOADED" = "1" ]; then
     # restore vhost backup if present, then test+reload (nginx-direct topology)
@@ -405,6 +430,10 @@ fi
 [ -x "$TMUX_BIN" ] || die "tmux binary not usable: $TMUX_BIN"
 
 # ---------------------------------------------------------------- backups --
+# CP11: from this point on, EVERY failure (die, ERR trap, explicit rollback)
+# reverts exactly this panel's changes — no more late exits that leave the
+# gateway, the ttyd root shell or a crash-looping unit running.
+CHANGES_BEGUN=1
 note "backup snapshot -> $BACKUP_DIR"
 mkdir -p "$BACKUP_DIR"
 for p in "$OPT_DIR" "$ETC_DIR" "$VARLIB_DIR" "$VARLOG_DIR"; do
@@ -534,6 +563,10 @@ render_internal_nginx() {
   cat > "$INGX_CONF_DIR/nginx.conf" <<EOF
 # HANASO OPS Web Terminal — internal nginx master config (loopback only)
 # Managed file — do not edit manually. Remove via scripts/uninstall.sh
+# CP11: the systemd unit uses Type=simple — the nginx master must stay in the
+# FOREGROUND (daemon off), otherwise systemd tracks a process that exits
+# immediately after the daemonizing fork.
+daemon off;
 worker_processes 1;
 error_log $VARLOG_DIR/nginx-internal-master-error.log warn;
 pid $INGX_VAR_DIR/nginx.pid;
@@ -578,7 +611,12 @@ if [ "$SANDBOX" != "1" ]; then
         -e "s|/var/lib/ops-terminal|$VARLIB_DIR|g" \
         -e "s|/var/log/ops-terminal|$VARLOG_DIR|g" \
         "$REPO_DIR/systemd/ops-terminal-nginx.service" > "$SYSTEMD_DIR/ops-terminal-nginx.service"
-    chown -R ops-gw:ops-gw "$INGX_CONF_DIR" "$INGX_VAR_DIR" 2>/dev/null || true
+    # CP11 permission model: the config dir is root-OWNED and read-only for
+    # the service user (ops-gw only reads); only the runtime dir (pid, tmp)
+    # and the log dir are writable by ops-gw. The service user must not be
+    # able to alter its own nginx config.
+    chown -R root:ops-gw "$INGX_CONF_DIR" 2>/dev/null || true
+    chown -R ops-gw:ops-gw "$INGX_VAR_DIR" 2>/dev/null || true
     chmod 0750 "$INGX_CONF_DIR" "$INGX_VAR_DIR"
   fi
   systemctl daemon-reload
@@ -618,7 +656,10 @@ if [ "$SANDBOX" = "1" ]; then
         >> "$VARLOG_DIR/ttyd.log" 2>&1 &
   echo $! > "$RUN_DIR/ttyd.pid"
   if [ "$SANDBOX_TOPOLOGY" = "haproxy" ]; then
-    nohup "$NGINX_BIN" -c "$INGX_CONF_DIR/nginx.conf" \
+    # mirror of the systemd ExecStart: -e stderr keeps the EARLY error log
+    # (opened before the config parse) away from the compiled-in default
+    # /var/log/nginx/error.log, exactly like the production unit.
+    nohup "$NGINX_BIN" -c "$INGX_CONF_DIR/nginx.conf" -e stderr \
           >> "$VARLOG_DIR/nginx-internal.log" 2>&1 &
     echo $! > "$RUN_DIR/nginx-internal.pid"
   fi
@@ -1026,7 +1067,7 @@ EOF
     # restart the internal nginx (config gained ssl material) — OUR service only
     if [ "$SANDBOX" = "1" ]; then
       stop_sandbox_svc nginx-internal
-      nohup "$NGINX_BIN" -c "$INGX_CONF_DIR/nginx.conf" >> "$VARLOG_DIR/nginx-internal.log" 2>&1 &
+      nohup "$NGINX_BIN" -c "$INGX_CONF_DIR/nginx.conf" -e stderr >> "$VARLOG_DIR/nginx-internal.log" 2>&1 &
       echo $! > "$RUN_DIR/nginx-internal.pid"
     else
       systemctl restart ops-terminal-nginx.service
