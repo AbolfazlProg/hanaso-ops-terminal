@@ -57,7 +57,7 @@ Debian 13 trixie / x86_64 / کاربر uid 1001 بدون root / PID1=tini / ngin
 | CP8 | نصب تک‌خطی `quick-install.sh` (curl \| bash) + رفع باگ fd0 + مستندسازی | 5e20327 / e5401ab | ✅ Push و تست‌شده |
 | CP9 | Release v1.2.0: CURRENT_STATE + مستندات one-liner تگ‌دار + SHA256SUMS نهایی | v1.2.0 | ✅ Push شده |
 | CP10 | HOTFIX: پذیرش `PREFLIGHT_CERT_PATH=''` + شاخه صدور certbot واقعی + مسیر ACME صحیح + بازسازی مسیر ACME در reinstall + اعتبارسنجی جفت گواهی + باتری CP10 (سناریوی دقیق VPS) | tag v1.2.1 | ✅ تست و Push شده — در انتظار نصب Production |
-| CP11 | HOTFIX Systemd/Nginx: PID یکتا + `-e stderr` + `daemon off` + سیاست Restart محدود + مالکیت پوشه‌ها + rollback قطع‌کننده حلقه + باتری CP11 (بازتولید دقیق از آرتیفکت‌های v1.2.1) | (این branch) | ✅ تست‌شده (۱۲۵ PASS) — در انتظار Tag/Push |
+| CP11 | HOTFIX Systemd/Nginx: PID یکتا + `-e stderr` + `daemon off` + سیاست Restart محدود + مالکیت پوشه‌ها + rollback قطع‌کننده حلقه + باتری CP11 (بازتولید دقیق از آرتیفکت‌های v1.2.1) | f437c4d (tag v1.2.2) | ✅ تست‌شده (۱۲۵ PASS) و Push شده — در انتظار نصب Production |
 
 ## نتایج آزمون (خلاصه)
 

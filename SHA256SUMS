@@ -1,5 +1,5 @@
 ae1436e8eb61a6bd077778486ade67d8ed621ebc3d27684687f28425ea6c06b2  ./.gitignore
-98271e9887c86bf715caeb49444494b942fcb30e9e5f8390942cb273af21c084  ./CURRENT_STATE.md
+07e40a3bea57513757aae4cac514a221c339ef6f3eeb7d353d885c4b77dab545  ./CURRENT_STATE.md
 a885f65d0e2f67f9f8f6bd6d9ed8109a2b2e5a55a256a89ad9d21b35a7471738  ./README.md
 1616cfe6b5bcf8ef8c69bb47c4ff012578b0ce4e64f6a50a68e8ffb04c01d735  ./docs/INSTALL.md
 a9b13a0c495e8b64b1f7e8a88baa0841d004f349d0ffe4a4937f8cc04ffb35d4  ./docs/ROLLBACK.md
@@ -32,6 +32,7 @@ d989f66a6ee31e71753419e384b55097b1567ed96737e4d6fc1b66a0ca1a8f7d  ./tests/haprox
 a87e4f178524627d850e8f9e8f1f538811d4203102eba00bad8cf2d8ec2af3f5  ./tests/run-battery.sh
 18783ae2af34137441a60e647f0e68c0382a3c4ade85a959d85cd7b6e57c9caa  ./tests/sandbox-ctl.sh
 ea4537b7cc91fac46fa6a1b4fed4d21eabf247bfd3dcc8a529ac8e0aa2dd7b56  ./tests/sd-runpath-shim.c
+4d37ee1aba81016aa6afee9e94ca9718c2446a27f5907a90f5fe147117a52c9f  ./tests/setup-sandbox-toolchain.sh
 35853f9114c0f60acf362c8bd0811f95b798e37f8847475b86df0f39b41abc09  ./tests/stub-certbot.sh
 0c8e0058d44907198d1321ac32c3a20ccd1ede90caf098de7e17259939faa4a5  ./tests/test_account.py
 de8525190ef334a877ceb44897fe1e9b5ad738fa6eca02c8bd0aaa5d3e3ce2bf  ./tests/test_bruteforce.py
