@@ -74,3 +74,34 @@ Sandbox اجازه root واقعی نمی‌دهد؛ همان کد مسیر Prod
 ## نکته عملیاتی
 
 اجرای اول باتری پس از rootproof با ۴ مرحله ناموفق بود چون Sweep فرزندان کهنه install، ttyd سندباکس اصلی را متوقف کرده بود (مستند در سربرگ rootproof.sh). اجرای دوم بعد از restore کامل → **کاملاً سبز**. قاعده: بعد از rootproof، باتری را بعد از یک install/اجرای سرویس‌ها اجرا کنید.
+
+---
+
+# الحاقیه CP12 — سازگاری نهایی systemd/nginx (2026-11-17)
+
+> باتری رسمی: `tests/cp12-battery.sh` → **TOTAL FAILED CHECKS: 0** (۱۰۱ PASS / ۰ FAIL)
+> رگرسیون‌ها پس از تغییرات: باتری CP11 → **۱۲۶ PASS / ۰ FAIL**، باتری nginx-direct → **0 FAILED**، باتری HAProxy → **0 FAILED**، باتری CP10 → **0 FAILED**
+
+## شواهد ماتریس باینری (ریشه حادثه `invalid option: "e"`)
+
+| باینری | نسخه | `-e stderr -v` | توضیح |
+|---------|------|-----------------|-------|
+| Debian trixie (سندباکس CP11) | 1.26.3 | rc=0 — می‌پذیرد | دلیل سبز ماندن تست‌های CP11 |
+| Ubuntu jammy nginx-core (کلاس VPS) | 1.18.0 | rc=1 — `nginx: invalid option: "e"` | همان خطای واقعی Production؛ سوییچ `-e` فقط از nginx **1.19.5** (2020-11-24) وجود دارد |
+| Ubuntu jammy — گزینه‌های کامپایل | — | `--error-log-path=/var/log/nginx/error.log` | همان مسیر لاگ کامپایل‌شده Production (Finding 2) |
+
+## نتایج گام‌های CP12
+
+* S1 ماتریس باینری + بازتولید دقیق مکانیسم حادثه روی باینری کلاس-VPS
+* S2 unit lint روی خطوط Exec: صفر `-e`، صفر `-g 'pid …'`، Restart=on-failure + StartLimit(120/5)، Type=simple، User/Group=ops-gw، hardening
+* S3 نصب واقعی از `scripts/install.sh` (haproxy-front) + pid یکتا در conf رندرشده + سایت مشترک سالم
+* S4 اجرای verbatim ExecStartPre/ExecStart/ExecReload روی nginx 1.18.0: پیکربندی OK، گوش‌دادن 127.0.0.1:7680، /health=200، `[alert]` اولیه ثبت‌شده و master زنده (بی‌خطر-طبق-طرح)، reload موفق بدون restart
+* S5 قرارداد هویت ops-gw: unit User=/Group=ops-gw، مالکیت root:ops-gw 0750 برای conf و ops-gw برای runtime/log، کاربر سیستم nologin، هویت اجرا با CapEff=0، هیچ chown/grant روی /var/log/nginx
+* S6 یازده گام پذیرش: سه سرویس سالم زیر پالیسی unit، 302 احراز هویت، e2e کامل از پشت SNI، مرورگر واقعی، id -u، دستور تعاملی، restart کنترل‌شده، شکست تحمیلی → NRestarts≤5 → failed بدون حلقه → recovery، rollback فقط-پنل (پورت‌ها آزاد، بلوک‌های HAProxy صفر، master pid ثابت، سایت مشترک سالم، Backupها حفظ‌شده)
+* S7 leftover-reinstall: unitهای حذف‌شده + فایل‌ها/Backupهای باقی‌مانده → نصب مجدد idempotent، credential قدیمی معتبر (e2e سبز)، Backupها دست‌نخورده
+* S8 اثبات systemd واقعی: `systemd-analyze verify` روی unitهای واقعی + تراکنش واقعی systemd 257 (`systemd --user --test` در userns تو در تو، عبور از booted() با tmpfs /run) با «Queued start job» و بارگذاری unitها و صفر خطای parse
+* S9 اجرای واقعی `quick-install.sh` از درخت کامیت‌شده: clone → SHA256SUMS OK → e2e → سلامت از پشت لبه اختصاصی → uninstall پاک
+
+## محدودیت ثبت‌شده (صادقانه)
+
+manager زنده‌ی systemd (system یا user) در این کانتینر قابل راه‌اندازی نیست: `/sys/fs/cgroup` یک tmpfs خارجی است، mount-over آن ممنوع است و manager واقعی در `manager_setup_cgroup` خارج می‌شود (شواهد ضبط‌شده: `strace` → `exit_group(1)` بلافاصله پس از `/proc/self/cgroup`؛ `cgroup.c:4160` «Cannot determine cgroup we are running in»؛ پیام ضبط‌شده CP11 «Failed to create /k8s.io/.../init.scope control group: Read-only file system»). پالیسی unitها با (a) پارسر واقعی systemd، (b) تراکنش واقعی manager و (c) supervisor وفادار به خطوط Exec آزموده می‌شود و روی VPS همان فایل‌ها بدون تغییر در manager واقعی بارگذاری می‌شوند.

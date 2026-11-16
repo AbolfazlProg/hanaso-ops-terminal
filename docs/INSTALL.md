@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/ma
 **پین‌کردن به نسخه منتشرشده (توصیه‌شده برای VPS)** — به‌جای شاخه `main`، خود URL خام را به Tag پین کنید:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.2.0/quick-install.sh \
+curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.2.3/quick-install.sh \
   | bash -s -- --domain ops.hanaso.ir --acme-email admin@hanaso.ir
 ```
 

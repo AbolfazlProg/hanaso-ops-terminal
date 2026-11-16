@@ -14,7 +14,7 @@ curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/ma
 - بوت‌استرپ `quick-install.sh` مخزن را می‌گیرد (git یا tarball)، مانیفست `SHA256SUMS` را **fail-closed** راستی‌آزمایی می‌کند و سپس Installer رسمی را اجرا می‌کند؛ بدون root اجرا نمی‌شود (مگر `--sandbox`).
 - **توصیه‌شده برای VPS — پین به نسخه منتشرشده:**
   ```bash
-  curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.2.0/quick-install.sh \
+  curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.2.3/quick-install.sh \
     | bash -s -- --domain ops.hanaso.ir --acme-email admin@hanaso.ir
   ```
 - پین‌کردن شاخه: `... | QUICK_INSTALL_REF=v1.0.0 bash -s -- --domain ops.hanaso.ir` — نکته: CDN خام تا ~۵ دقیقه بعد از Push ممکن است نسخه قبلی شاخه `main` را سرو کند؛ URL تگ‌دار (بالا) این مسئله را ندارد.
@@ -75,7 +75,7 @@ nginx داخلی مستقل (127.0.0.1:7680 — کاربر ops-gw، فقط loopb
 | `scripts/ops-terminal-passwd` | تولید/چرخش Credential بدون افشا در argv |
 | `scripts/e2e-test.py` | تست انتها-به-انتها: Login → WebSocket → اجرای دستور → Assertion |
 | `scripts/health-check.sh` | بررسی سلامت سرویس‌ها + loopback-only (آگاه از توپولوژی) |
-| `tests/` | باتری nginx-direct (۴۶ PASS) + باتری HAProxy (۸۱ PASS) + مرورگر واقعی (Playwright) + آزمون ROOT (userns) |
+| `tests/` | باتری nginx-direct + باتری HAProxy + باتری CP10/CP11/CP12 + مرورگر واقعی (Playwright) + آزمون ROOT (userns) |
 | `docs/` | مستندات نصب/امنیت/حذف/عیب‌یابی/Rollback |
 
 ## نصب سریع (Owner)
@@ -90,5 +90,6 @@ Installer توپولوژی (nginx یا HAProxy) را خودش در Preflight ت�
 
 - وضعیت لحظه‌ای: [`CURRENT_STATE.md`](CURRENT_STATE.md)
 - گزارش کامل تست Sandbox: [`tests/SANDBOX_TEST_REPORT.md`](tests/SANDBOX_TEST_REPORT.md)
-- باتری nginx-direct: `bash tests/run-battery.sh` — آخرین نتیجه: **0 FAILED (۴۶ PASS)**
-- باتری HAProxy: `bash tests/haproxy-battery.sh` — آخرین نتیجه: **0 FAILED (۸۱ PASS)**
+- باتری nginx-direct: `bash tests/run-battery.sh` — آخرین نتیجه: **0 FAILED**
+- باتری HAProxy: `bash tests/haproxy-battery.sh` — آخرین نتیجه: **0 FAILED**
+- باتری CP12 (سازگاری نهایی systemd/nginx): `bash tests/cp12-battery.sh` — آخرین نتیجه: **0 FAILED (۱۰۱ PASS)** — شامل اجرای verbatim unit روی باینری هم‌کلاس VPS (Ubuntu 1.18.0) و اثبات تراکنش واقعی systemd 257 روی unitهای واقعی

@@ -129,6 +129,46 @@ journalctl -u ops-terminal-nginx --since -10min
 * مالکیت: `/etc/ops-terminal/nginx` → `root:ops-gw` (سرویس فقط می‌خواند)، `/var/lib/ops-terminal/nginx` و `/var/log/ops-terminal` → `ops-gw`.
 * Rollback شکست نصب فقط unitهای خود پنل را متوقف می‌کند (`scripts/ops-systemd.sh`)، حلقه restart را می‌شکند (`kill` + `reset-failed`)، فایل‌های unit را حذف و بلوک‌های مدیریت‌شده HAProxy را state-independent جارو می‌کند — سرویس‌های مشترک KOTODAMA/HANASO دست‌نخورده می‌مانند.
 
+
+## حادثه 2026-11-17 (CP12) — درس‌های ثبت‌شده (در این نسخه رفع شده)
+
+### ۱) `nginx: invalid option: "e"` — سرویس داخلی هرگز بالا نیامد
+
+**علت:** سوییچ `-e` فقط از nginx **1.19.5** (2020-11-24) وجود دارد؛ CP11 آن را در
+`ExecStart/ExecStartPre/ExecReload` گذاشته بود در حالی که باینری nginx روی VPS
+قدیمی‌تر است (کلاس Ubuntu LTS = 1.18.0). nginx قبل از حتی خواندن پیکربندی خارج شد.
+
+**رفع در v1.2.3:** خط فرمان unit دیگر هیچ گزینه وابسته به نسخه ندارد:
+
+```ini
+ExecStartPre=/usr/sbin/nginx -c /etc/ops-terminal/nginx/nginx.conf -t
+ExecStart=/usr/sbin/nginx -c /etc/ops-terminal/nginx/nginx.conf
+ExecReload=/usr/sbin/nginx -c /etc/ops-terminal/nginx/nginx.conf -s reload
+```
+
+### ۲) `[alert] could not open error log file: ... /var/log/nginx/error.log` در journalctl — بی‌خطر است
+
+**رفتار طراحی‌شده (خطا نیست):** nginx *قبل از* parse پیکربندی، لاگ خطای کامپایل‌شده
+را باز می‌کند؛ با هویت غیر-root `ops-gw` این باز شدن روی لاگ مشترک مجاز نیست و
+همان یک خط `[alert]` به stderr (و سپس journald) می‌رود و nginx **ادامه می‌دهد**.
+دسترسی به `/var/log/nginx` عمداً هرگز به ops-gw داده نمی‌شود (نقض مرز لاگ مشترک
+HANASO/KOTODAMA ممنوع است) و اجرای nginx به‌عنوان root برای دور زدن آن ممنوع.
+
+* تمام لاگِ پس-از-parse فقط زیر `/var/log/ops-terminal` است (مالکیت ops-gw).
+* اگر در journalctl فقط همین alert را می‌بینید و `systemctl is-active ops-terminal-nginx`
+  = active و `/health` = 200 است → همه‌چیز سالم است.
+* برای تشخیص نسخه واقعی باینری روی VPS، لاگ نصب را ببینید:
+  `[install] nginx binary identity: nginx version: ...` (از v1.2.3 ثبت می‌شود).
+
+### ۳) سه معیار قبولی — فقط حالت ۳ معتبر است
+
+۱. `nginx -t` با root و بدون آرگومان‌های unit → فقط conf را می‌بیند (کور).
+۲. اجرای nginx با هویت سرویس بدون آرگومان‌های unit → ناقص.
+۳. **اجرای واقعی همان unit با همان ExecStart و همان تنظیمات امنیتی systemd** →
+   تنها معیار پذیرش production. باتری CP12 (`tests/cp12-battery.sh`) حالت ۳ را
+   روی باینری هم‌کلاس VPS (Ubuntu 1.18.0) اجرا می‌کند؛ باتری‌های قبلی فقط با
+   باینری Debian 1.26 اجرا می‌کردند و به همین دلیل `invalid option` را ندیدند.
+
 ## نکته درباره قطع و وصل
 
 قطع مرورگر Session را نمی‌بندد: tmux session «ops» روی سرور زنده می‌ماند و با بازگشت، همان‌جا ادامه می‌یابد. اگر Session تازه می‌خواهید داخل ترمینال `exit` بزنید.

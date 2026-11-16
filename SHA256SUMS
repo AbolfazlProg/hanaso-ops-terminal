@@ -1,10 +1,10 @@
 ae1436e8eb61a6bd077778486ade67d8ed621ebc3d27684687f28425ea6c06b2  ./.gitignore
-07e40a3bea57513757aae4cac514a221c339ef6f3eeb7d353d885c4b77dab545  ./CURRENT_STATE.md
-a885f65d0e2f67f9f8f6bd6d9ed8109a2b2e5a55a256a89ad9d21b35a7471738  ./README.md
-1616cfe6b5bcf8ef8c69bb47c4ff012578b0ce4e64f6a50a68e8ffb04c01d735  ./docs/INSTALL.md
+6f23b4658e081a9a2ab05b7d5398453611b2e419b62f216eda8b5a1735a6219e  ./CURRENT_STATE.md
+5fcb730f38c10778a1b95a1c04369cd821a0db4444231ecc3266e2154dfaaa9e  ./README.md
+2363b71edc9199955c1ac86cf8acfdadd7c1f3a058eda850d5fd6fc0d585874b  ./docs/INSTALL.md
 a9b13a0c495e8b64b1f7e8a88baa0841d004f349d0ffe4a4937f8cc04ffb35d4  ./docs/ROLLBACK.md
 d74e9a6be0decbdfa17904beb71d89b36d9a4212985ad28edfa30fb39bff6291  ./docs/SECURITY.md
-d93a0130892385f088cb2aa255213890c746b670b0dae88998dd4dd62e0ca338  ./docs/TROUBLESHOOTING.md
+9b7296ee2dcb40bd4dcbdf7f6111e61cd358fdfc813bcca41498941f6aa9c30d  ./docs/TROUBLESHOOTING.md
 65837d985ccec57edfa5ccd2bcb51fa5b2fa996a6c8787d050ff1341ebf112ac  ./gateway/gateway.py
 1bc9e4c49c72c1cf250e04a9583701931150ceb4ecf4537790c56f39fc22c4ce  ./nginx/ops-terminal-internal.conf.template
 973bfeefe83204b6cfa863b3f87d3dac70cdfba1dd9cec6b120f3fdc162e837e  ./nginx/ops-terminal.conf.template
@@ -21,7 +21,7 @@ cd54f8d30281db1466d4da5ad11ab5a436903a031900ad63e4f6ba3f77629d27  ./scripts/pref
 40953f88048e3352113d1ba2540de5a9da2929f3239b17006e6556db7717ea53  ./systemd/ops-terminal-gateway.service
 1deaf4a3c38a167cf98f6be8c31d7f961cb6f3f23520e4350662f4e20292086a  ./systemd/ops-terminal-nginx.service
 3a68dad07c8ab1cde94eae9977ad35c892f4950ab6c096b17cde281ba5378290  ./systemd/ops-terminal.service
-053fef65c53ff589939df4ed1cedd3e74063ef1cefbc1e98ce62fba6166ea6b3  ./tests/SANDBOX_TEST_REPORT.md
+d988761025f547fc861aabffb62ab4f6c55d90e897e2eb818bd0725a18f12918  ./tests/SANDBOX_TEST_REPORT.md
 52b5d41e5a0d0cb89823e2d342ced8cef8ce67882d623b143a517f5735da0b0e  ./tests/browser-test.js
 9d720351627d5cd5ce94328a3273f65d344ce8dd9b3db5951b3b5ba9fdbbac5b  ./tests/cp10-battery.sh
 bf89ed078129fa7db34702cac4c7bd2f43db7d4fa0a0d78da26a2d3e7fb8f4a4  ./tests/cp11-battery.sh
