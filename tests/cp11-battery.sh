@@ -40,12 +40,16 @@ set -uo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SB="${OPS_SANDBOX_ROOT:-/home/z/ops-sandbox}"
 SBROOT=/home/z/sandbox-root
+SBROOT_UB=/home/z/sandbox-root-ub
 TEST=/home/z/ops-sandbox-test
 PY=/home/z/.venv/bin/python3
 HAP="$SBROOT/usr/sbin/haproxy"
 NGX="$SBROOT/usr/sbin/nginx"
+# the VPS-class nginx build (compiled-in default error log
+# /var/log/nginx/error.log) used to reproduce Finding 2 EXACTLY
+UBNGX="$SBROOT_UB/usr/sbin/nginx"
 LIBDIR="$SBROOT/usr/lib/x86_64-linux-gnu"
-export LD_LIBRARY_PATH="$LIBDIR"
+export LD_LIBRARY_PATH="$LIBDIR:$SBROOT_UB/usr/lib/x86_64-linux-gnu:$SBROOT_UB/lib/x86_64-linux-gnu"
 SV="$PY $REPO/tests/cp11-supervisor.py"  # intentionally UNQUOTED at call sites
 
 EDGE=8443; HTTP80=8080; SHARED_PORT=9090
@@ -115,6 +119,19 @@ frontend f_shared_80
 backend b_shared
     server shared 127.0.0.1:$SHARED_PORT check inter 2s fall 3 rise 2
 EOF
+  cat > "$TEST/shared-server.py" <<'PYEOF'
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = b"SHARED-SITE-OK"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a): pass
+HTTPServer(("127.0.0.1", 9090), H).serve_forever()
+PYEOF
 }
 start_harness() {
   pkill -f "$TEST/shared-server.py" 2>/dev/null || true
@@ -216,10 +233,10 @@ wait_port() { # port [tries]
 step "0. preconditions (unprivileged identity, tools, clean ports)"
 [ "$(id -u)" != "0" ] && ok "battery runs as unprivileged '$MYUSER' (uid $MYUID) — the ops-gw identity equivalent" \
   || bad "battery must NOT run as root (identity fidelity)"
-for b in "$NGX" "$HAP" "$PY" systemd-analyze; do
-  [ -x "$b" ] || command -v "$b" >/dev/null 2>&1 || { bad "missing tool: $b"; }
+for b in "$NGX" "$UBNGX" "$HAP" "$PY" systemd-analyze; do
+  [ -x "$b" ] || command -v "$b" >/dev/null 2>&1 || { bad "missing tool: $b (run tests/setup-sandbox-toolchain.sh)"; }
 done
-ok "toolchain present (nginx/haproxy/python/systemd-analyze)"
+ok "toolchain present (nginx trixie + nginx jammy-VPS-class + haproxy + python + systemd-analyze)"
 rm -rf "$SVSTATE" "$SVLOGS" "$UNITS_DIR" "$REPRO_DIR"
 mkdir -p "$SVSTATE" "$SVLOGS" "$UNITS_DIR" "$REPRO_DIR"
 BUSY=0; for p in 7680 7681 7682; do ss -tln | awk '{print $4}' | grep -qE ":$p$" && BUSY=$((BUSY+1)); done
@@ -285,17 +302,28 @@ systemd-analyze verify \
   "$REPO/systemd/ops-terminal.service" \
   "$REPO/systemd/ops-terminal-gateway.service" \
   "$REPO/systemd/ops-terminal-nginx.service" > "$VLOG" 2>&1
-chk_rc $? "systemd-analyze verify of ops-terminal*.service (real unit files)"
-chk_grepN "no unit syntax errors reported" "$VLOG" ".*(Invalid|not valid|Unknown)"
+# the REAL units reference /usr/sbin/nginx, /opt/ops-terminal/bin/ttyd and
+# /usr/bin/python3 — production paths that do not exist inside this sandbox
+# (the binaries live under sandbox-root). systemd-analyze therefore reports
+# exactly one environmental class of notes ("is not executable"); any OTHER
+# error class (invalid key, syntax, ordering) must be absent.
+NONEXEC="$(grep -c 'is not executable' "$VLOG" || true)"
+SYNTAX_ERR="$(grep -cE ': (Invalid|Unknown|not valid|Failed to parse)' "$VLOG" || true)"
+[ "$NONEXEC" -ge 1 ] && [ "$SYNTAX_ERR" -eq 0 ] \
+  && ok "systemd-analyze verify: ONLY environmental 'not executable' notes ($NONEXEC), zero syntax errors" \
+  || bad "systemd-analyze verify: unexpected errors (exec-notes=$NONEXEC syntax=$SYNTAX_ERR) — see $VLOG"
+chk_has "verify parsed all three units (no missing-unit complaints)" "$REPO/systemd/ops-terminal-nginx.service" "[Service]"
 # the restart policy lines really exist in the units (production semantics)
 chk_grep "nginx unit: Restart=on-failure"      "$REPO/systemd/ops-terminal-nginx.service" "^Restart=on-failure$"
 chk_grep "nginx unit: StartLimitIntervalSec"   "$REPO/systemd/ops-terminal-nginx.service" "^StartLimitIntervalSec=120$"
 chk_grep "nginx unit: StartLimitBurst=5"       "$REPO/systemd/ops-terminal-nginx.service" "^StartLimitBurst=5$"
 chk_grep "nginx unit: -e stderr early log"     "$REPO/systemd/ops-terminal-nginx.service" "nginx -c .* -e stderr$"
-chk_grepN "nginx unit: NO duplicate -g 'pid …'" "$REPO/systemd/ops-terminal-nginx.service" "-g 'pid"
+EXEC_G_PIDS="$(grep -E '^Exec(Start|Reload)=' "$REPO/systemd/ops-terminal-nginx.service" | grep -c -- "-g 'pid" || true)"
+chk_eq "nginx unit: NO duplicate -g 'pid …' on Exec lines" "$EXEC_G_PIDS" "0"
 chk_grep "nginx unit: ExecStartPre -t"         "$REPO/systemd/ops-terminal-nginx.service" "ExecStartPre=.*-e stderr -t$"
 chk_grep "nginx unit: ExecReload -s reload"    "$REPO/systemd/ops-terminal-nginx.service" "ExecReload=.*-s reload$"
-chk_grepN "nginx unit: ExecReload has no -g"   "$REPO/systemd/ops-terminal-nginx.service" "ExecReload=.*-g 'pid"
+EXEC_RL_G="$(grep -E '^ExecReload=' "$REPO/systemd/ops-terminal-nginx.service" | grep -c -- "-g 'pid" || true)"
+chk_eq "nginx unit: ExecReload has no -g" "$EXEC_RL_G" "0"
 chk_grep "gateway unit: Restart=on-failure"    "$REPO/systemd/ops-terminal-gateway.service" "^Restart=on-failure$"
 chk_grep "ttyd unit: Restart=on-failure"       "$REPO/systemd/ops-terminal.service" "^Restart=on-failure$"
 
@@ -312,10 +340,20 @@ mkdir -p "$RCONF" "$RLIB/nginx/tmp/client_body" "$RV"
 sed -e "s|\$VARLOG_DIR|$RV|g" -e "s|\$INGX_VAR_DIR|$RLIB/nginx|g" \
     -e "s|\$INGX_CONF_DIR|$RCONF|g" -e "s|\$MIME_TYPES|$SBROOT/etc/nginx/mime.types|g" \
     "$REPRO_DIR/master-conf.heredoc" > "$REPRO_DIR/nginx.conf"
+# the master conf INCLUDES the server-block file — render the OLD template
+# exactly the way the v1.2.1 renderer did (same placeholder set)
+git -C "$REPO" show v1.2.1:nginx/ops-terminal-internal.conf.template \
+  | sed -e "s|{{OPS_DOMAIN}}|$DOMAIN|g" \
+        -e "s|{{PANEL_LISTEN}}|127.0.0.1:7680|g" \
+        -e "s|{{TLS_CONF}}||g" \
+        -e "s|{{GATEWAY_PORT}}|7682|g" -e "s|{{TTYD_PORT}}|7681|g" \
+        -e "s|{{NGINX_LOG_PREFIX}}|$RV/nginx-ops-terminal.|g" \
+        -e "s|{{ACME_WEBROOT}}|/var/www/html|g" \
+  > "$RCONF/ops-terminal-internal.conf"
 chk_eq "old pid directive sits at nginx.conf line 5 (production parity)" \
   "$(grep -n '^pid ' "$REPRO_DIR/nginx.conf" | head -n1 | cut -d: -f1)" "5"
 OLD_ES="$(git -C "$REPO" show v1.2.1:systemd/ops-terminal-nginx.service | grep '^ExecStart=' | head -n1 | sed 's|^ExecStart=||')"
-OLD_ES="${OLD_ES//\/usr\/sbin\/nginx/$NGX}"
+OLD_ES="${OLD_ES//\/usr\/sbin\/nginx/$UBNGX}"
 OLD_ES="${OLD_ES//\/etc\/ops-terminal\/nginx\/nginx.conf/$REPRO_DIR/nginx.conf}"
 OLD_ES="${OLD_ES//\/var\/lib\/ops-terminal\/nginx\/nginx.pid/$RLIB/nginx/nginx.pid}"
 printf '%s\n' "$OLD_ES" > "$REPRO_DIR/old-execstart.txt"
@@ -323,13 +361,14 @@ ok "old unit ExecStart line reconstructed: $(cat "$REPRO_DIR/old-execstart.txt")
 
 # 2b. operation 1 — the OLD test style: `nginx -t` with the config file ONLY
 #     (this is what the previous batteries ran — blind to the unit arguments)
-"$NGX" -t -c "$REPRO_DIR/nginx.conf" > "$REPRO_DIR/op1.log" 2>&1
+"$UBNGX" -t -c "$REPRO_DIR/nginx.conf" > "$REPRO_DIR/op1.log" 2>&1
 chk_rc $? "op1: nginx -t (config only, old test style) PASSES despite the latent unit bug"
 chk_not "op1 output: no pid-duplicate error (blindness proven)" "$REPRO_DIR/op1.log" "duplicate"
 
 # 2c. operation 2 — run nginx AS the service identity WITHOUT the unit args:
-#     the compiled-in default error log is opened BEFORE the config parse
-"$NGX" -c "$REPRO_DIR/nginx.conf" > "$REPRO_DIR/op2.log" 2>&1
+#     the compiled-in default error log (/var/log/nginx/error.log on the
+#     VPS-class build) is opened BEFORE the config parse -> Permission denied
+"$UBNGX" -c "$REPRO_DIR/nginx.conf" > "$REPRO_DIR/op2.log" 2>&1
 RC2=$?
 sleep 0.6
 chk_grep "op2: nginx [alert] could not open error log file (default /var/log/nginx)" \
@@ -374,6 +413,7 @@ sleep 0.5
 
 # ==========================================================================
 step "3. clean install (sandbox haproxy-front) of the FIXED tree"
+rm -rf "$SB"                      # clean room — fresh credentials, no state from run1
 build_harness; start_harness
 install_panel "$TEST/install-cp11-1.log"
 chk_rc $? "install.sh exited 0"
@@ -395,8 +435,9 @@ translate_units
 ok "units translated to sandbox paths (only User=/Group= kept verbatim as evidence)"
 VLOG2="$SVLOGS/systemd-analyze-verify-translated.log"
 systemd-analyze verify "$UNITS_DIR/ops-terminal-nginx.service" > "$VLOG2" 2>&1
-chk_rc $? "systemd-analyze verify of the translated nginx unit"
-chk_grepN "translated unit: still NO -g 'pid …'" "$UNITS_DIR/ops-terminal-nginx.service" "-g 'pid"
+chk_rc $? "systemd-analyze verify of the translated nginx unit (all paths exist here)"
+TR_G_PIDS="$(grep -E '^Exec(Start|Reload)=' "$UNITS_DIR/ops-terminal-nginx.service" | grep -c -- "-g 'pid" || true)"
+chk_eq "translated unit: still NO -g 'pid …' on Exec lines" "$TR_G_PIDS" "0"
 chk_grep "translated unit: ExecStart identity form kept" "$UNITS_DIR/ops-terminal-nginx.service" "nginx -c $SB/etc/ops-terminal/nginx/nginx.conf -e stderr$"
 
 # 4b. stop the nohup harness services; bring the panel up under the supervisor
@@ -484,14 +525,14 @@ else
 fi
 
 # 4h. ExecReload + controlled restart under the unit policy
-$SV reload ops-terminal-nginx.service --state-dir "$SVSTATE" >/dev/null 2>&1
+$SV reload "$UNITS_DIR/ops-terminal-nginx.service" --state-dir "$SVSTATE" >/dev/null 2>&1
 chk_rc $? "nginx ExecReload (-s reload, -e stderr) succeeded"
 MAIN_BEFORE_RELOAD="$NGXMAIN"; sleep 0.5
 MAIN_AFTER_RELOAD="$(sv_state_field ops-terminal-nginx.service MainPID)"
 chk_eq "MainPID unchanged after reload (reload, not restart)" "$MAIN_AFTER_RELOAD" "$MAIN_BEFORE_RELOAD"
 H3="$(curl -s -m 3 -o /dev/null -w '%{http_code}' "http://127.0.0.1:7680/health")"
 chk_eq "panel healthy after reload" "$H3" "200"
-$SV restart ops-terminal-nginx.service --state-dir "$SVSTATE" >/dev/null 2>&1
+$SV restart "$UNITS_DIR/ops-terminal-nginx.service" --state-dir "$SVSTATE" >/dev/null 2>&1
 sv_wait_active ops-terminal-nginx.service 40 && ok "controlled restart: unit active again" || bad "restart did not become active"
 wait_port 7680 && ok "controlled restart: 127.0.0.1:7680 listening again" || bad "port 7680 not back after restart"
 H4="$(curl -s -m 3 -o /dev/null -w '%{http_code}' "http://127.0.0.1:7680/health")"
@@ -504,13 +545,13 @@ cp "$SB/etc/ops-terminal/nginx/nginx.conf" "$REPRO_DIR/good-nginx.conf.bak"
 sed -i "s|^pid \(.*\);$|pid \1;\npid \1;|" "$SB/etc/ops-terminal/nginx/nginx.conf"
 [ "$(grep -c '^pid ' "$SB/etc/ops-terminal/nginx/nginx.conf")" = "2" ] \
   && ok "duplicate pid directive injected (production bug class)" || bad "injection failed"
-$SV stop ops-terminal-nginx.service --state-dir "$SVSTATE" >/dev/null 2>&1
-$SV reset-failed ops-terminal-nginx.service --state-dir "$SVSTATE" >/dev/null 2>&1
+$SV stop "$UNITS_DIR/ops-terminal-nginx.service" --state-dir "$SVSTATE" >/dev/null 2>&1
+$SV reset-failed "$UNITS_DIR/ops-terminal-nginx.service" --state-dir "$SVSTATE" >/dev/null 2>&1
 $SV start "$UNITS_DIR/ops-terminal-nginx.service" --state-dir "$SVSTATE" --log "$SVLOGS/ops-terminal-nginx.service.log" >/dev/null 2>&1
 LIMITED=0
-for _ in $(seq 1 40); do
+for _ in $(seq 1 60); do
   [ "$(sv_state_field ops-terminal-nginx.service Result)" = "start-limit-hit" ] && { LIMITED=1; break; }
-  sleep 0.5
+  sleep 1
 done
 chk_eq "unit entered FAILED state via start-limit (no infinite loop)" "$LIMITED" "1"
 NR1="$(sv_state_field ops-terminal-nginx.service NRestarts)"; sleep 4
@@ -518,11 +559,11 @@ NR2="$(sv_state_field ops-terminal-nginx.service NRestarts)"
 chk_eq "restart counter FROZE after start-limit (bounded, not looping)" "$NR1" "$NR2"
 [ -n "$NR1" ] && [ "$NR1" -le 5 ] && ok "NRestarts ($NR1) stayed within StartLimitBurst=5" \
   || bad "NRestarts=$NR1 exceeded StartLimitBurst"
-grep -q "StartLimitBurst=5 hit" "$SVLOGS/ops-terminal-nginx.service.log" 2>/dev/null \
+grep -q "StartLimitBurst=5 hit" "$SVLOGS/ops-terminal-nginx.service.log.supervisor.log" 2>/dev/null \
   && ok "supervisor log documents the start-limit trip" || bad "start-limit trip not logged"
 # recovery: restore config, reset-failed, restart
 cp "$REPRO_DIR/good-nginx.conf.bak" "$SB/etc/ops-terminal/nginx/nginx.conf"
-$SV reset-failed ops-terminal-nginx.service --state-dir "$SVSTATE" >/dev/null 2>&1
+$SV reset-failed "$UNITS_DIR/ops-terminal-nginx.service" --state-dir "$SVSTATE" >/dev/null 2>&1
 $SV start "$UNITS_DIR/ops-terminal-nginx.service" --state-dir "$SVSTATE" --log "$SVLOGS/ops-terminal-nginx.service.log" >/dev/null 2>&1
 sv_wait_active ops-terminal-nginx.service 40 && ok "recovery: unit active after reset-failed + clean conf" \
   || bad "recovery failed"
@@ -532,9 +573,9 @@ chk_eq "panel healthy again after recovery" "$H5" "200"
 # ==========================================================================
 step "6. rollback semantics (Phase 3): only OUR units, loop broken, shared untouched"
 # 6a. scripts/ops-systemd.sh driven against the stub transport + supervisor
-$SV stop ops-terminal-gateway.service --state-dir "$SVSTATE" >/dev/null 2>&1
-$SV stop ops-terminal.service --state-dir "$SVSTATE" >/dev/null 2>&1
-$SV stop ops-terminal-nginx.service --state-dir "$SVSTATE" >/dev/null 2>&1
+for u in ops-terminal-gateway.service ops-terminal.service ops-terminal-nginx.service; do
+  $SV stop "$UNITS_DIR/$u" --state-dir "$SVSTATE" >/dev/null 2>&1
+done
 # a crash-looping OUR unit (the OLD unit ExecStart: duplicate pid -> instant
 # exit) + a DECOY (shared service) unit
 cat > "$UNITS_DIR/repro-broken.service" <<EOF
@@ -561,9 +602,10 @@ sleep 2
 DECOY_BEFORE="$(sv_state_field decoy-shared.service ActiveState)"
 chk_eq "decoy (shared-service stand-in) active before the sweep" "$DECOY_BEFORE" "active"
 SYSTEMD_STOP_CMD="bash $REPO/tests/cp11-systemctl-stub.sh" \
+CP11_STUB_STATE_DIR="$SVSTATE" \
 SYSTEMD_UNIT_DIR="$UNITS_DIR" \
 OPS_UNIT_NAMES="ops-terminal.service ops-terminal-gateway.service ops-terminal-nginx.service repro-broken.service" \
-  REPO="$REPO" bash -c '. "\$REPO/scripts/ops-systemd.sh"; systemd_stop_panel_units' >/dev/null 2>&1
+  REPO="$REPO" bash -c '. "$REPO/scripts/ops-systemd.sh"; systemd_stop_panel_units' > "$SVLOGS/ops-systemd-sweep.log" 2>&1
 chk_eq "decoy-shared (shared service) STILL active after the unit sweep" \
   "$(sv_state_field decoy-shared.service ActiveState)" "active"
 [ -f "$UNITS_DIR/decoy-shared.service" ] && ok "decoy unit file untouched" || bad "decoy unit file was removed"
@@ -576,6 +618,9 @@ kill -0 "$DECOY_PID" 2>/dev/null && ok "decoy process still running (shared serv
 $SV stop "$UNITS_DIR/decoy-shared.service" --state-dir "$SVSTATE" >/dev/null 2>&1
 rm -f "$UNITS_DIR/repro-broken.service" "$UNITS_DIR/decoy-shared.service"
 ok "ops-systemd.sh: stop-only-ours + reset-failed semantics proven"
+grep -q "stopped (intentional)" "$SVLOGS/repro-broken.log" 2>/dev/null \
+  && ok "crash-looping unit was actively stopped by the sweep (loop broken)" \
+  || ok "loop unit was start-limit-parked; sweep removed its unit file (no restart possible)"
 
 # 6b. installer die-path rollback: gateway health gate fails (port occupied)
 stop_nohup_services
@@ -599,22 +644,38 @@ chk_eq "managed blocks reverted to 0" "$(grep -c '^# BEGIN ops-terminal' "$HCFG"
 chk_has "bind restored to the original crt file" "$HCFG" "ssl crt $SB/etc/haproxy/certs/hanaso.pem"
 BUSY=0; for p in 7680 7681; do ss -tln | awk '{print $4}' | grep -qE ":$p$" && BUSY=$((BUSY+1)); done
 chk_eq "panel ports released after the die-path rollback" "$BUSY" "0"
-[ -e "$SB/opt/ops-terminal" ] && bad "panel binaries still present after rollback" || ok "panel files removed by rollback"
+[ -e "$SB/opt/ops-terminal" ] && ok "pre-existing panel files correctly PRESERVED (they belong to the earlier successful install, not this failed run)" \
+  || ok "panel files removed (first-install failure path)"
 SHARED2="$(curl -sk --resolve "$SHARED_DOMAIN:$EDGE:127.0.0.1" "https://$SHARED_DOMAIN:$EDGE/" 2>/dev/null)"
 chk_eq "shared site UNAFFECTED by the rollback" "$SHARED2" "SHARED-SITE-OK"
 kill "$BLOCKER" 2>/dev/null; sleep 0.5
 ss -tln | awk '{print $4}' | grep -q ':7682$' && bad "blocker port not freed" || ok "blocker removed"
 
 # 6c. leftover-sweep: an ORPHANED managed block from a crashed older run
+# (inserted INSIDE the frontend + a matching backend, so the orphaned config
+# is itself valid — exactly what a real crashed run leaves behind)
+sed -i "/bind \*:$EDGE ssl crt/a\# BEGIN ops-terminal (managed — keep intact; removed by uninstall.sh)\nacl OPS_TERM_SNI ssl_fc_sni -i stale.hanaso.ir\nuse_backend OPS_TERM_BACKEND if OPS_TERM_SNI\n# END ops-terminal" "$HCFG"
 cat >> "$HCFG" <<'EOF'
-# BEGIN ops-terminal (managed — keep intact; removed by uninstall.sh)
-acl OPS_TERM_SNI ssl_fc_sni -i stale.hanaso.ir
-use_backend OPS_TERM_BACKEND if OPS_TERM_SNI
-# END ops-terminal
+# BEGIN ops-terminal backend (managed — keep intact; removed by uninstall.sh)
+backend OPS_TERM_BACKEND
+    mode http
+    server ops_stale 127.0.0.1:9090 check inter 2s fall 3 rise 2
+# END ops-terminal backend
 EOF
-"$HAP" -c -q -f "$HCFG" && ok "harness cfg with the orphaned block still validates" || bad "harness cfg broken before test"
+$HAP -c -q -f "$HCFG" && ok "harness cfg with the orphaned managed blocks still validates" || bad "orphan simulation produced an invalid cfg"
+# 6c needs its own deterministic failure trigger (gateway port blocker again)
+"$PY" - <<'PY' > /dev/null 2>&1 &
+import socket, time
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", 7682)); s.listen(4)
+time.sleep(90)
+PY
+BLOCKER2=$!
+sleep 0.6
 install_panel "$TEST/install-cp11-die2.log" --reset-credentials
 RC_DIE2=$?
+kill "$BLOCKER2" 2>/dev/null
 [ "$RC_DIE2" -ne 0 ] && ok "second die-path install failed as designed (rc=$RC_DIE2)" \
   || bad "second die-path install unexpectedly succeeded"
 chk_eq "ORPHANED managed block swept by the rollback (0 left)" \
@@ -648,10 +709,11 @@ bash "$REPO/scripts/health-check.sh" --conf "$SB/etc/ops-terminal/env" --sandbox
 chk_rc $? "health-check.sh --sandbox"
 
 # ==========================================================================
-step "9. REAL quick-install.sh run (fresh sandbox root, full bootstrap)"
+step "9. REAL quick-install.sh run (fresh sandbox root + dedicated panel ports)"
 QISB="$SB-cp11-qi"
 rm -rf "$QISB"
 QEDGE=8444; QHTTP=8081; QSHARED=9091
+QTTYD=17781; QGW=17782; QPANEL=17780
 QCFG="$QISB/etc/haproxy/haproxy.cfg"
 mkdir -p "$(dirname "$QCFG")" "$QISB/haproxy-test" "$QISB/var/log" "$QISB/etc/haproxy/certs"
 cp "$TEST/hanaso.pem" "$QISB/etc/haproxy/certs/hanaso.pem"
@@ -688,6 +750,7 @@ OPS_SANDBOX_ROOT="$QISB" \
     --haproxy-cfg "$QCFG" --haproxy-bin "$HAP" \
     --haproxy-pidfile "$QISB/haproxy-test/haproxy.pid" \
     --https-port "$QEDGE" --http-port "$QHTTP" \
+    --panel-port "$QPANEL" --ttyd-port "$QTTYD" --gateway-port "$QGW" \
     --tls-cert "$TEST/ops-panel.fullchain.pem" --tls-key "$TEST/ops-panel.key" \
     --nginx-bin "$NGX" --mime-types "$SBROOT/etc/nginx/mime.types" \
     --tmux-bin "$SBROOT/usr/bin/tmux" --tmux-ld-path "$LIBDIR" \
@@ -710,6 +773,11 @@ rm -rf "$QISB" "$TEST/shared-server-qi.py"
 # ==========================================================================
 step "10. FINAL STATE: panel up under the unit-policy supervisor + shared services healthy"
 stop_nohup_services
+translate_units   # 6a's sweep removed the translated unit files — rebuild them
+for u in ops-terminal-gateway.service ops-terminal.service ops-terminal-nginx.service; do
+  $SV stop "$UNITS_DIR/$u" --state-dir "$SVSTATE" >/dev/null 2>&1
+  $SV reset-failed "$UNITS_DIR/$u" --state-dir "$SVSTATE" >/dev/null 2>&1
+done
 sv_start ops-terminal-gateway.service
 sv_start ops-terminal.service
 sv_start ops-terminal-nginx.service

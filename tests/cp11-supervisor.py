@@ -153,7 +153,12 @@ class UnitRuntime:
                         st = self._read()
                         if st.get("__stopping") or not os.path.exists(self.state_file):
                             return
-                    return
+                        # an external `reset-failed` (or a start-limit window
+                        # that slid away) lets the unit start again — resume
+                        if st.get("Result") != "start-limit-hit":
+                            log("%s: start-limit cleared externally -> resuming" % self.name)
+                            break
+                    continue
             st["attempts"].append(now)
 
             st["ActiveState"] = "activating"

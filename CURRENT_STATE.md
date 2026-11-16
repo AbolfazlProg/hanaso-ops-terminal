@@ -1,6 +1,6 @@
 # CURRENT STATE — HANASO OPS Web Terminal
 
-> آخرین به‌روزرسانی: 2026-11-17 — CP10 (HOTFIX گواهی خالی + صدور Let's Encrypt از مسیر ACME واقعی)
+> آخرین به‌روزرسانی: 2026-11-17 — CP11 (HOTFIX شکست Systemd/Nginx در Production — PID تکراری / لاگ خطا / حلقه Restart)
 > این فایل وضعیت واقعی را در هر Checkpoint ثبت می‌کند. هیچ ادعای Push/Deploy بدون تأیید نمی‌شود.
 
 ## مأموریت
@@ -36,6 +36,11 @@ Debian 13 trixie / x86_64 / کاربر uid 1001 بدون root / PID1=tini / ngin
 | D13 | nginx داخلی پشت HAProxy: مستقل، loopback-only، `absolute_redirect off` (جلوگیری از ریدایرکت مطلق به پورت داخلی) |
 | D14 | نصب تک‌خطی: بوت‌استرپ `quick-install.sh` (curl \| bash) — کلون مخزن + راستی‌آزمایی fail-closed مانیفست SHA256SUMS + پاس عیناً به Installer رسمی؛ **fd0 هرگز لمس نمی‌شود** (منبعِ خود اسکریپت در حالت curl \| bash) — درس تست واقعی 2026-11-17 |
 | D15 | CP10: مقدار خالی `PREFLIGHT_CERT_PATH=''` وضعیت معمولیِ «بدون گواهی موجود» است (پارسر: newline اضافه برای grep تا خطِ خالی match شود؛ fail-closed دست‌نخورده)؛ صدور Let's Encrypt از مسیر ACME مدیریت‌شده :80 با `use_backend` (نه `http-request use-backend` که در HAProxy 2.x/3.x نامعتبر است)؛ اعتبارسنجی جفت گواهی در همه مسیرها؛ reinstall مسیر ACME را بازمی‌سازد |
+| D16 | CP11: PID فایل دقیقاً «یک مرجع» دارد (فقط در nginx.conf؛ Unit هرگز با `-g 'pid …;'` آن را دوباره تعریف نمی‌کند) — علت خطای واقعی `"pid" directive is duplicate in nginx.conf:5` |
+| D17 | CP11: لاگ خطای اولیه nginx با `-e stderr` به journald می‌رود (بدون دسترسی به لاگ مشترک `/var/log/nginx`)؛ لاگ پس-از-parse فقط زیر `/var/log/ops-terminal`؛ `daemon off;` در conf اصلی برای Type=simple؛ `ExecStartPre` هم `nginx -t` را با هویت سرویس اجرا می‌کند |
+| D18 | CP11: سیاست Restart همه unitها: `Restart=on-failure` + `RestartSec=3` + `StartLimitIntervalSec=120`/`StartLimitBurst=5` — بعد از ۵ شکست متوالی unit به failed می‌رود و DOWN می‌ماند (حلقه ۹۷۲تایی Production دیگر ممکن نیست) |
+| D19 | CP11: مالکیت پوشه‌ها: conf داخلی `root:ops-gw` (فقط-خواندنی برای سرویس)، pid/tmp و لاگ‌ها ops-gw — کاربر سرویس نمی‌تواند پیکربندی خودش را تغییر دهد |
+| D20 | CP11: Rollback شکست نصب: `die()` بعد از اولین تغییر → rollback کامل؛ شاخه production فقط unitهای خود پروژه را متوقف می‌کند (`scripts/ops-systemd.sh`: disable --now + TERM/KILL + reset-failed + حذف فایل‌های unit) و بلوک‌های مدیریت‌شده HAProxy را state-independent می‌جارو (بقایای runهای قبلی هم حذف و reload اعتبارسنجی‌شده) |
 
 ## Checkpoints
 
@@ -52,6 +57,7 @@ Debian 13 trixie / x86_64 / کاربر uid 1001 بدون root / PID1=tini / ngin
 | CP8 | نصب تک‌خطی `quick-install.sh` (curl \| bash) + رفع باگ fd0 + مستندسازی | 5e20327 / e5401ab | ✅ Push و تست‌شده |
 | CP9 | Release v1.2.0: CURRENT_STATE + مستندات one-liner تگ‌دار + SHA256SUMS نهایی | v1.2.0 | ✅ Push شده |
 | CP10 | HOTFIX: پذیرش `PREFLIGHT_CERT_PATH=''` + شاخه صدور certbot واقعی + مسیر ACME صحیح + بازسازی مسیر ACME در reinstall + اعتبارسنجی جفت گواهی + باتری CP10 (سناریوی دقیق VPS) | tag v1.2.1 | ✅ تست و Push شده — در انتظار نصب Production |
+| CP11 | HOTFIX Systemd/Nginx: PID یکتا + `-e stderr` + `daemon off` + سیاست Restart محدود + مالکیت پوشه‌ها + rollback قطع‌کننده حلقه + باتری CP11 (بازتولید دقیق از آرتیفکت‌های v1.2.1) | (این branch) | ✅ تست‌شده (۱۲۵ PASS) — در انتظار Tag/Push |
 
 ## نتایج آزمون (خلاصه)
 
@@ -59,6 +65,8 @@ Debian 13 trixie / x86_64 / کاربر uid 1001 بدون root / PID1=tini / ngin
 - باتری HAProxy ۱۶ مرحله‌ای: **TOTAL FAILED STEPS: 0** (۸۱ PASS / ۰ FAIL) — شامل install، تبدیل برگشت‌پذیر crt→crt-list، e2e کامل از پشت TLS+SNI، مرورگر واقعی، brute-force، XFF spoof-proofing، rollback تحمیلی (شکست e2e بعد از سیم‌کشی HAProxy → بازگشت دقیق)، idempotent reinstall، uninstall و نصب نهایی — `tests/haproxy-battery.sh`
 - نصب تک‌خطی واقعی از GitHub (2026-11-17): `curl -fsSL .../main/quick-install.sh \| bash -s -- --sandbox ...` → clone از github.com (commit e5401ab) → **SHA256SUMS: OK** → نصب کامل + e2e داخلی Installer → health-check **HEALTHY** → uninstall پاک — rc=0. نکته: CDN خام تا ~۵ دقیقه بعد از Push نسخه قبلی را سرو می‌کند؛ برای VPS از URL تگ‌دار (v1.2.0) استفاده کنید.
 - باتری CP10 (`tests/cp10-battery.sh`) — سناریوی دقیق VPS (`PREFLIGHT_CERT_PATH=''` + certbot موجود + clean install بدون گواهی اولیه): **TOTAL FAILED STEPS: 0** (۹۱ PASS) — پذیرش fixture پارسر + فعال‌شدن شاخه certbot + round-trip چالش ACME از لبه واقعی :80 + صدور شبیه‌سازی‌شده با certbot stub + جایگزینی مسیر + اعتبار HAProxy + HTTPS/SNI/WS + مرورگر واقعی + **id -u=0 از مرورگر** + rollback تحمیلی + uninstall (حفظ state LE) + مسیر منفی صدور شکست → TLS GATE فقط-loopback
+- باتری CP11 (`tests/cp11-battery.sh`): **TOTAL FAILED CHECKS: 0** (۱۲۵ PASS) — بازتولید سه یافته Production از آرتیفکت‌های واقعی v1.2.1 (خطای دقیق `"pid" directive is duplicate in nginx.conf:5` با ExecStart واقعی و هویت سرویس؛ alert واقعی `could not open error log file /var/log/nginx/error.log` با nginx کلاس-VPS اوبونتو 1.18؛ حلقه Restart بی‌کران با Restart=always: شمارنده ۳→۵ در ۴.۵ ثانیه) + `systemd-analyze verify` روی unitهای واقعی + اجرای unitها با supervisor وفادار به پالیسی (گوش‌دادن 127.0.0.1:7680، MainPID==pidfile، reload/restart کنترل‌شده) + StartLimit (NRestarts≤5، شمارنده منجمد، failed state) + auth/websocket/مرورگر واقعی از پشت SNI + sweep مالکیت‌خصوصی unitها با decoy سالم + die-path rollback دوبار (بقایای HAProxy هم پاک) + uninstall + clean reinstall + اجرای واقعی quick-install.sh
+- محدودیت محیط (مستندشده): systemd واقعی به‌عنوان Manager در این کانتینر بالا نمی‌آید (PID1=tini؛ cgroup v1 فقط-خواندنی — پیام ضبط‌شده manager واقعی: `Failed to create /k8s.io/.../init.scope control group: Read-only file system`)؛ پالیسی unitها با پارسر خود systemd (`systemd-analyze verify`) و supervisor وفادار به پالیسی آزموده می‌شود و روی VPS همان فایل‌ها بدون تغییر در systemd واقعی بارگذاری می‌شوند. بازسازی ابزار: `tests/setup-sandbox-toolchain.sh`
 - رگرسیون CP7 پس از تغییرات install.sh: باتری HAProxy **۰ FAILED** — رگرسیون baseline: باتری nginx-direct **۰ FAILED**
 - مرورگر واقعی (Playwright) در هر دو توپولوژی: ✅ — متن ترمینال از `window.term` + اثبات فایل side-channel
 - ROOT-proof (userns): `id -u -> 0` از مرورگر واقعی و WS ✅

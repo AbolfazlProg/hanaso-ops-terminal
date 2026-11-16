@@ -85,6 +85,50 @@ ss -tlnp | grep -E ':(7680|7681|7682)'           # باید فقط 127.0.0.1 ب�
 - بعد از صدور موفق، چک نهایی `[ -r "$TLS_CERT" ]` روی متغیر خالی می‌مرد (در توپولوژی haproxy متریال در `PANEL_PEM_SRC_*` است) — حتی نصب موفق هم die می‌شد.
 - اعتبارسنجی جفت گواهی اکنون در **همه مسیرها** انجام می‌شود (خوانایی + انقضا ≥ ۲۴ ساعت + پوشش SAN دامنه + تطابق کلید) و صدور ناموفق → **TLS GATE** امن فقط-loopback.
 
+## حادثه 2026-11-17 (CP11) — شکست Systemd/Nginx در Production (در این نسخه رفع شده)
+
+سه یافته از Diagnostic واقعی VPS — هر سه در نسخه v1.2.2 رفع شده‌اند:
+
+### ۱. «pid directive is duplicate in nginx.conf:5»
+
+**علت ریشه‌ای:** Unit سرویس PID را دو جا تعریف می‌کرد — داخل خود nginx.conf (خط ۵) و روی خط فرمان ExecStart با `-g 'pid …;'`. nginx هنگام parse دومی را duplicate می‌بیند و بلافاصله خارج می‌شود.
+
+**رفع:** PID فقط یک مرجع دارد — `pid` فقط در nginx.conf. ExecStart/ExecReload دیگر `-g` ندارند:
+
+```bash
+# Unit فعلی (درست):
+ExecStartPre=/usr/sbin/nginx -c /etc/ops-terminal/nginx/nginx.conf -e stderr -t
+ExecStart=/usr/sbin/nginx     -c /etc/ops-terminal/nginx/nginx.conf -e stderr
+ExecReload=/usr/sbin/nginx    -c /etc/ops-terminal/nginx/nginx.conf -e stderr -s reload
+```
+
+**درس تست:** `nginx -t` بدون آرگومان‌های systemd (حتی به‌عنوان root) این باگ را «سبز» می‌کند — چون `-g` فقط در ExecStart است. معیار پذیرش Production-like فقط اجرای همان ExecStart با همان هویت سرویس است.
+
+### ۲. «could not open error log file: open() "/var/log/nginx/error.log" failed (13: Permission denied)»
+
+**علت ریشه‌ای:** nginx مسیر لاگ خطای کامپایل‌شده را **قبل از parse پیکربندی** باز می‌کند. با کاربر غیر-root (`ops-gw`) این باز شدن روی لاگ مشترک nginx شکست می‌خورد.
+
+**رفع:** `-e stderr` در ExecStart/ExecReload — لاگ اولیه به stderr می‌رود و journald آن را ثبت می‌کند (`journalctl -u ops-terminal-nginx`). هیچ مجوزی به `/var/log/nginx` مشترک داده نمی‌شود. لاگ پس-از-parse فقط زیر `/var/log/ops-terminal` است. برای همان خطای زودهنگام روی unit، `journalctl -u ops-terminal-nginx -n 50` را ببینید.
+
+### ۳. حلقه بی‌نهایت Restart (شمارنده ۹۷۲)
+
+**علت ریشه‌ای:** `Restart=always` + `RestartSec=2` بدون `StartLimitIntervalSec`/`StartLimitBurst` → خطای پیکربندی دائمی = restart بی‌پایان هر ۲ ثانیه.
+
+**رفع (هر سه unit):** `Restart=on-failure` + `RestartSec=3` + `StartLimitIntervalSec=120` + `StartLimitBurst=5` — بعد از ۵ شکست در بازه ۱۲۰ ثانیه، unit به حالت failed می‌رود و **DOWN می‌ماند**.
+
+```bash
+systemctl status ops-terminal-nginx        # NRestarts / Result
+systemctl reset-failed ops-terminal-nginx  # فقط بعد از رفع علت!
+journalctl -u ops-terminal-nginx --since -10min
+```
+
+### اصلاحات پشتیبانی در همین CP
+
+* `daemon off;` در conf اصلی nginx داخلی → master در foreground می‌ماند و Type=simple واقعاً MainPID را دنبال می‌کند.
+* `ExecStartPre` قبل از هر start همان پیکربندی را با هویت سرویس `nginx -t` می‌کند؛ پیکربندی خراب هرگز وارد حلقه restart نمی‌شود.
+* مالکیت: `/etc/ops-terminal/nginx` → `root:ops-gw` (سرویس فقط می‌خواند)، `/var/lib/ops-terminal/nginx` و `/var/log/ops-terminal` → `ops-gw`.
+* Rollback شکست نصب فقط unitهای خود پنل را متوقف می‌کند (`scripts/ops-systemd.sh`)، حلقه restart را می‌شکند (`kill` + `reset-failed`)، فایل‌های unit را حذف و بلوک‌های مدیریت‌شده HAProxy را state-independent جارو می‌کند — سرویس‌های مشترک KOTODAMA/HANASO دست‌نخورده می‌مانند.
+
 ## نکته درباره قطع و وصل
 
 قطع مرورگر Session را نمی‌بندد: tmux session «ops» روی سرور زنده می‌ماند و با بازگشت، همان‌جا ادامه می‌یابد. اگر Session تازه می‌خواهید داخل ترمینال `exit` بزنید.

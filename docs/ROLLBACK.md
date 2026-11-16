@@ -13,6 +13,17 @@ Installer با `trap ERR` کار می‌کند: هر شکست → توقف سر�
 
 Rollback **مستقل از metadata نسل فعلی نصب** است و وضعیت را از خود config جاری استخراج می‌کند — بنابراین روی «نصب مجدد روی تبدیل قبلی» هم صحیح کار می‌کند (تأییدشده در باتری HAProxy).
 
+### CP11 — توقف قطعی unitهای خود پنل (قطع حلقه Restart)
+
+از CP11 هر دو مسیر rollback (خودکار Installer و uninstaller) از `scripts/ops-systemd.sh` استفاده می‌کنند که **فقط unitهای متعلق به همین پنل** را با ترتیب امن متوقف می‌کند:
+
+1. `systemctl disable --now ops-terminal.service ops-terminal-gateway.service ops-terminal-nginx.service`
+2. اگر unit هنوز active بود (وسط RestartSec back-off): `kill --signal=SIGTERM` و در صورت نیاز `kill --signal=SIGKILL` — حلقه restart این‌جا قطع می‌شود.
+3. `systemctl reset-failed` برای هر سه unit — حالت failed باقیمانده از StartLimit پاک می‌شود تا هیچ چیزی دوباره restart نکند.
+4. حذف فایل‌های unit از `/etc/systemd/system` + `daemon-reload`.
+
+سپس یک اظهار اطمینان (`systemd_panel_units_stopped`) چک می‌کند که هیچ unit پنل فعال نمانده است. سرویس‌های مشترک (nginx/haproxy مشترک، پنل‌های KOTODAMA/HANASO) در هیچ کدام از این گام‌ها لمس نمی‌شوند. همچنین بلوک‌های مدیریت‌شده HAProxy مستقل از وضعیت این run جارو می‌شوند — بقایای یک run قبلیِ کرش‌کرده هم حذف و با `haproxy -c` اعتبارسنجی و reload می‌شود.
+
 ## سطح ۲ — حذف کامل پنل (Uninstaller)
 
 ```bash
