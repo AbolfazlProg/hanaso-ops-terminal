@@ -2,6 +2,32 @@
 
 راهنمای نصب واقعی روی سرور. برای روش آزمایش در Sandbox، [`tests/SANDBOX_TEST_REPORT.md`](../tests/SANDBOX_TEST_REPORT.md) و باتری HAProxy (`tests/haproxy-battery.sh`) را ببینید.
 
+## نصب تک‌خطی (Quick Install)
+
+روی VPS به‌عنوان root:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/main/quick-install.sh \
+  | bash -s -- --domain ops.hanaso.ir --acme-email admin@hanaso.ir
+```
+
+بوت‌استرپ `quick-install.sh` (در ریشه مخزن) این کارها را انجام می‌دهد:
+
+1. مخزن را با `git clone --depth 1` می‌گیرد (در نبود git، tarball از codeload.github.com).
+2. مانیفست `SHA256SUMS` درختِ دریافتشده را راستی‌آزمایی می‌کند — ناهمخوانی = توقف (**fail-closed**).
+3. بدون root اجرا نمی‌شود، مگر اینکه `--sandbox` (حالت آزمایش بدون دسترسی root) پاس شده باشد.
+4. `scripts/install.sh` را با همه آرگومان‌ها **عیناً** اجرا می‌کند (پرسش تعاملی تأیید روی TTY کار می‌کند).
+
+تنظیمات خود بوت‌استرپ فقط از طریق متغیرهای محیطی (هیچ فلگی را مصرف نمی‌کند):
+
+| متغیر | پیش‌فرض | شرح |
+|-------|---------|------|
+| `QUICK_INSTALL_REPO` | مخزن رسمی پروژه | URL گیت یا `OWNER/REPO` |
+| `QUICK_INSTALL_REF` | `main` | شاخه یا Tag (مثلاً `v1.0.0`) |
+| `QUICK_INSTALL_SKIP_SHA` | خالی | `1` = رد شدن از راستی‌آزمایی SHA256SUMS (توصیه نمی‌شود) |
+
+> **نکته امنیتی:** `curl | bash` به GitHub و TLS اعتماد می‌کند. برای نصب کاملاً پین‌شده و قابل‌بازبینی، مخزن را Clone کنید، `SHA256SUMS` را خودتان چک کنید و `scripts/install.sh` را مستقیم اجرا کنید (ادامه همین سند).
+
 ## معماری
 
 Installer توپولوژی Reverse Proxy را در Preflight خودکار تشخیص می‌دهد:

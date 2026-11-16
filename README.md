@@ -3,6 +3,18 @@
 پنل ترمینال تحت وب با **ROOT Shell واقعی** برای VPS مشترک HANASO — پشت احراز هویت مستقل،
 قفل Brute-Force و HTTPS روی Reverse Proxy موجود — بدون وابستگی عملیاتی به GitHub Actions، SSH از Sandbox یا Cloudflare Tunnel.
 
+## نصب تک‌خطی (VPS — به‌عنوان root)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/main/quick-install.sh \
+  | bash -s -- --domain ops.hanaso.ir --acme-email admin@hanaso.ir
+```
+
+- همه آرگومان‌ها عیناً به `scripts/install.sh` پاس می‌شوند (`--yes`، `--tls-cert/--tls-key`، پورت‌ها و …).
+- بوت‌استرپ `quick-install.sh` مخزن را می‌گیرد (git یا tarball)، مانیفست `SHA256SUMS` را **fail-closed** راستی‌آزمایی می‌کند و سپس Installer رسمی را اجرا می‌کند؛ بدون root اجرا نمی‌شود (مگر `--sandbox`).
+- پین‌کردن نسخه: `... | QUICK_INSTALL_REF=v1.0.0 bash -s -- --domain ops.hanaso.ir`
+- برای نصب قابل‌بازبینی، مخزن را Clone کنید و `SHA256SUMS` را خودتان چک کنید — راهنمای کامل: [`docs/INSTALL.md`](docs/INSTALL.md)
+
 ## معماری — هر دو توپولوژی Reverse Proxy پشتیبانی می‌شود
 
 ```
