@@ -39,9 +39,9 @@ Debian 13 trixie / x86_64 / کاربر uid 1001 بدون root / PID1=tini / ngin
 | CP1 | معماری/مقایسه راهکارها (README + مستندات) | d7f12d2..6f3f3b6 | ✅ Push شده |
 | CP2 | پیاده‌سازی کامل (gateway/units/vhost/scripts) | 6f3f3b6 | ✅ Push شده |
 | CP3/4 | استقرار Sandbox + ۱۴ e2e سبز | a3f469a | ✅ Push شده |
-| CP5 | تست مرورگر واقعی + باتری کامل + ROOT-proof + هاردنینگ (session revocation و...) | TBD-SHA-CP5 | ✅ |
-| CP6 | مستندات کامل + SHA256SUMS + Tag v1.0.0 + Installer تست‌شده | TBD-SHA-CP6 | ✅ |
-| — | Release (SHA256SUMS + tag v1.0.0) | TBD-SHA-REL | ✅ |
+| CP5 | تست مرورگر واقعی + باتری کامل + ROOT-proof + هاردنینگ (session revocation و...) | f1e40d0 | ✅ |
+| CP6 | مستندات کامل + SHA256SUMS + Tag v1.0.0 + Installer تست‌شده | e1fb8a1 | ✅ |
+| — | Release (SHA256SUMS + tag v1.0.0) | v1.0.0 | ✅ |
 
 ## نتایج آزمون (خلاصه)
 
