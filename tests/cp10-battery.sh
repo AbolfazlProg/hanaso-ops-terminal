@@ -47,6 +47,13 @@ PWFILE="$TEST/pw-cp10-current"
 export OPS_LE_LIVE_BASE="$LEBASE"
 export OPS_STUB_HTTP80="$HTTP80"
 export OPS_STUB_CA_DIR="$TEST"
+# the test CA is a session artifact — recreate it when the environment was
+# recycled (tests/setup-sandbox-toolchain.sh does not create it)
+if [ ! -r "$TEST/ca.crt" ] || [ ! -r "$TEST/ca.key" ]; then
+  openssl req -x509 -newkey rsa:2048 -keyout "$TEST/ca.key" -out "$TEST/ca.crt" \
+    -days 365 -nodes -subj "/CN=cp10-stub-ca" 2>/dev/null \
+    && echo "  [battery] test CA regenerated at $TEST/ca.{crt,key}"
+fi
 export OPS_STUB_LIVE_BASE="$LEBASE"
 
 export OPS_TEST_BASE="https://$DOMAIN:$EDGE"
@@ -166,8 +173,12 @@ step "0-pre. port hygiene: no stray panel from any sandbox"
 pkill -f 'opt/ops-terminal/gateway/gateway.py' 2>/dev/null || true
 pkill -f 'opt/ops-terminal/bin/ttyd' 2>/dev/null || true
 pkill -f 'ops-terminal-internal.conf' 2>/dev/null || true
+pkill -f 'ops-terminal/nginx/nginx.conf' 2>/dev/null || true
 pkill -f 'new -A -s ops' 2>/dev/null || true
-sleep 0.8
+# a previous haproxy-front battery leaves its own edge + shared stub behind
+pkill -f '/home/z/ops-sandbox' 2>/dev/null || true
+pkill -f 'shared-server' 2>/dev/null || true
+sleep 1
 BUSY=0; for p in 7680 7681 7682; do
   ss -tln 2>/dev/null | awk '{print $4}' | grep -qE ":$p$" && BUSY=$((BUSY+1))
 done

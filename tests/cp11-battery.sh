@@ -240,6 +240,12 @@ done
 ok "toolchain present (nginx trixie + nginx jammy-VPS-class + haproxy + python + systemd-analyze)"
 rm -rf "$SVSTATE" "$SVLOGS" "$UNITS_DIR" "$REPRO_DIR"
 mkdir -p "$SVSTATE" "$SVLOGS" "$UNITS_DIR" "$REPRO_DIR"
+# sweep leftovers from a previous battery run (supervisor services, nohup panel)
+pkill -f "cp11-supervisor.py" 2>/dev/null || true
+pkill -f "$SB/opt/ops-terminal" 2>/dev/null || true
+pkill -f "$SB/etc/ops-terminal" 2>/dev/null || true
+pkill -f "new -A -s ops" 2>/dev/null || true
+sleep 1
 BUSY=0; for p in 7680 7681 7682; do ss -tln | awk '{print $4}' | grep -qE ":$p$" && BUSY=$((BUSY+1)); done
 chk_eq "panel ports 7680/7681/7682 free at start" "$BUSY" "0"
 
@@ -318,7 +324,11 @@ chk_has "verify parsed all three units (no missing-unit complaints)" "$REPO/syst
 chk_grep "nginx unit: Restart=on-failure"      "$REPO/systemd/ops-terminal-nginx.service" "^Restart=on-failure$"
 chk_grep "nginx unit: StartLimitIntervalSec"   "$REPO/systemd/ops-terminal-nginx.service" "^StartLimitIntervalSec=120$"
 chk_grep "nginx unit: StartLimitBurst=5"       "$REPO/systemd/ops-terminal-nginx.service" "^StartLimitBurst=5$"
-chk_not   "nginx unit: NO version-dependent -e switch (CP12: invalid option on nginx <1.19.5)" "$REPO/systemd/ops-terminal-nginx.service" "-e stderr"
+# lint the EXEC LINES only — the unit comments legitimately mention the
+# historical bug forms in prose (CP12 lesson: lint the code, not the prose)
+CP11_EXEC="$(grep -E '^Exec(Start|StartPre|Reload)=' "$REPO/systemd/ops-terminal-nginx.service")"
+chk_eq "nginx unit: NO version-dependent -e switch on Exec lines (CP12: invalid option on nginx <1.19.5)" \
+  "$(printf '%s\n' "$CP11_EXEC" | grep -c -F -- '-e' || true)" "0"
 EXEC_G_PIDS="$(grep -E '^Exec(Start|Reload)=' "$REPO/systemd/ops-terminal-nginx.service" | grep -c -- "-g 'pid" || true)"
 chk_eq "nginx unit: NO duplicate -g 'pid …' on Exec lines" "$EXEC_G_PIDS" "0"
 chk_grep "nginx unit: ExecStartPre -t"         "$REPO/systemd/ops-terminal-nginx.service" "ExecStartPre=.*-t$"
@@ -439,7 +449,9 @@ systemd-analyze verify "$UNITS_DIR/ops-terminal-nginx.service" > "$VLOG2" 2>&1
 chk_rc $? "systemd-analyze verify of the translated nginx unit (all paths exist here)"
 TR_G_PIDS="$(grep -E '^Exec(Start|Reload)=' "$UNITS_DIR/ops-terminal-nginx.service" | grep -c -- "-g 'pid" || true)"
 chk_eq "translated unit: still NO -g 'pid …' on Exec lines" "$TR_G_PIDS" "0"
-chk_not   "translated unit: ExecStart identity form kept, still NO -e" "$UNITS_DIR/ops-terminal-nginx.service" "-e stderr"
+TR_EXEC="$(grep -E '^Exec(Start|StartPre|Reload)=' "$UNITS_DIR/ops-terminal-nginx.service")"
+chk_eq "translated unit: still NO -e on Exec lines (CP12 form)" \
+  "$(printf '%s\n' "$TR_EXEC" | grep -c -F -- '-e' || true)" "0"
 chk_grep "translated unit: verbatim ExecStart (CP12 form)" "$UNITS_DIR/ops-terminal-nginx.service" "ExecStart=.*nginx -c .*nginx\.conf$"
 
 # 4b. stop the nohup harness services; bring the panel up under the supervisor

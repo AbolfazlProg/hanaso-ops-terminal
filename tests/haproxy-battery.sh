@@ -137,6 +137,20 @@ install_panel() { # logfile extra-args...
 }
 
 # =============================================================== main ======
+step "-1. clean room (sweep leftovers from previous battery runs)"
+# a previous battery (nginx-direct or cp12) leaves panel services, its own
+# harness haproxy and shared-site stubs on these ports — this battery owns
+# the sandbox root and starts from scratch.
+pkill -f "cp11-supervisor.py" 2>/dev/null || true
+pkill -f "$SB/opt/ops-terminal" 2>/dev/null || true
+pkill -f "$SB/etc/ops-terminal" 2>/dev/null || true
+pkill -f "$SB/nginx/nginx.conf" 2>/dev/null || true
+pkill -f "new -A -s ops" 2>/dev/null || true
+pkill -f "/home/z/ops-sandbox" 2>/dev/null || true
+pkill -f "shared-server" 2>/dev/null || true
+sleep 1
+rm -rf "$SB"
+
 step "0. harness: shared site + HAProxy edge (baseline, NO panel)"
 build_harness
 start_harness

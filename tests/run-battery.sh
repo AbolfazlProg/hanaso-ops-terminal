@@ -18,6 +18,33 @@ TOTAL_FAIL=0
 step() { echo; echo "############################################"; echo "### $*"; echo "############################################"; }
 run() { "$@"; local rc=$?; [ "$rc" -ne 0 ] && TOTAL_FAIL=$((TOTAL_FAIL+1)) && echo "  ^^ STEP FAILED (rc=$rc)"; return 0; }
 
+step "-1. CLEAN INSTALL (nginx-direct sandbox — the battery baseline)"
+# hygiene: a haproxy-topology battery run leaves a different sandbox layout
+# behind; this battery is nginx-direct and starts from its own clean room.
+pkill -f "cp11-supervisor.py" 2>/dev/null || true
+pkill -f "$SB/opt/ops-terminal" 2>/dev/null || true
+pkill -f "$SB/etc/ops-terminal" 2>/dev/null || true
+pkill -f "$SB/nginx/nginx.conf" 2>/dev/null || true
+pkill -f "new -A -s ops" 2>/dev/null || true
+# the haproxy-front harness (edge 8443) and its shared-site stub also hold
+# the ports this nginx-direct battery needs
+pkill -f "/home/z/ops-sandbox" 2>/dev/null || true
+sleep 1
+rm -rf "$SB"
+TESTCERT=/home/z/ops-sandbox-test
+[ -r "$TESTCERT/cert.pem" ] && [ -r "$TESTCERT/key.pem" ] || {
+  openssl req -x509 -newkey rsa:2048 -keyout "$TESTCERT/key.pem" \
+    -out "$TESTCERT/cert.pem" -days 30 -nodes \
+    -subj "/CN=ops.hanaso.ir" -addext "subjectAltName=DNS:ops.hanaso.ir" 2>/dev/null
+}
+run bash "$REPO/scripts/install.sh" --sandbox \
+  --tls-cert "$TESTCERT/cert.pem" --tls-key "$TESTCERT/key.pem" \
+  --nginx-bin /home/z/sandbox-root/usr/sbin/nginx \
+  --mime-types /home/z/sandbox-root/etc/nginx/mime.types \
+  --tmux-bin /home/z/sandbox-root/usr/bin/tmux \
+  --tmux-ld-path /home/z/sandbox-root/usr/lib/x86_64-linux-gnu \
+  --python-bin "$PY" --yes
+
 step "0. health-check"
 run bash "$REPO/scripts/health-check.sh" --conf "$SB/etc/ops-terminal/env" --sandbox
 
