@@ -1,0 +1,148 @@
+# ==========================================================================
+# HANASO OPS Web Terminal — INTERNAL nginx (TEMPLATE — rendered by
+# scripts/install.sh for the haproxy-front topology).
+#
+# HAProxy owns public :443 and routes ops.hanaso.ir (SNI/Host ACL) to this
+# listener on LOOPBACK ONLY. This nginx is an INDEPENDENT instance with its
+# own master config — the shared nginx of KOTODAMA/HANASO is never touched.
+#
+# Placeholders: {{OPS_DOMAIN}} {{PANEL_LISTEN}} {{TLS_CONF}}
+#               {{GATEWAY_PORT}} {{TTYD_PORT}} {{NGINX_LOG_PREFIX}}
+#               {{ACME_WEBROOT}}
+#   {{PANEL_LISTEN}} = full listen line, e.g. "127.0.0.1:7680" (HAProxy
+#   terminates TLS) or "127.0.0.1:7680 ssl" (tcp-passthrough topology).
+#   {{TLS_CONF}}   = ssl_certificate/ssl_protocols block (passthrough only).
+# Managed file — do not edit manually. Remove via scripts/uninstall.sh
+# ==========================================================================
+
+# Outer brute-force cap on the login endpoint. NOTE: with HAProxy in front
+# this zone sees the HAProxy source (127.0.0.1), so it is a global cap for
+# the whole panel — conservative and intentional (single-operator panel).
+# The true client IP (set by HAProxy, spoofed XFF deleted there) is enforced
+# by the gateway's per-IP progressive lockout.
+limit_req_zone $binary_remote_addr zone=ops_login:10m rate=24r/m;
+
+# WebSocket upgrade map. The result variable name is unique to avoid
+# colliding with any map already present in any nginx config.
+map $http_upgrade $ops_connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+upstream ops_terminal_gateway {
+    server 127.0.0.1:{{GATEWAY_PORT}};
+    keepalive 8;
+}
+
+upstream ops_terminal_ttyd {
+    server 127.0.0.1:{{TTYD_PORT}};
+    keepalive 4;
+}
+
+# access log format WITHOUT query strings (never logs tokens/secrets in URLs)
+log_format ops_terminal '$remote_addr [$time_local] "$request_method $uri" $status '
+                        '$body_bytes_sent "$http_user_agent" rt=$request_time';
+
+server {
+    listen {{PANEL_LISTEN}};
+    server_name {{OPS_DOMAIN}};
+
+    # nginx's absolute_redirect default rewrites `return 302 /login` into an
+    # ABSOLUTE Location using THIS server's scheme/port (http://…:{{PANEL_PORT}}).
+    # Behind HAProxy the panel port is loopback-only — an absolute Location
+    # would send real browsers to a dead address. Keep redirects RELATIVE so
+    # the browser resolves them against the original scheme/host/port.
+    absolute_redirect off;
+
+    {{TLS_CONF}}
+
+    # ACME HTTP-01 answers — this listener is the loopback target of the
+    # HAProxy-managed acme backend (challenge files never leave the host).
+    location /.well-known/acme-challenge/ {
+        root {{ACME_WEBROOT}};
+        default_type "text/plain";
+    }
+
+    access_log {{NGINX_LOG_PREFIX}}access.log ops_terminal;
+    error_log  {{NGINX_LOG_PREFIX}}error.log warn;
+
+    client_max_body_size 1m;
+
+    # ---- public: login page (rate-limited) + health ---------------------
+    location = /login {
+        limit_req zone=ops_login burst=12 nodelay;
+        limit_req_status 429;
+        proxy_pass http://ops_terminal_gateway;
+        proxy_set_header Host $host;
+        # HAProxy deletes any client-supplied X-Forwarded-For and sets the
+        # true client IP; forwarding $http_x_forwarded_for is therefore
+        # spoof-proof here (this listener is reachable ONLY via HAProxy).
+        proxy_set_header X-Forwarded-For $http_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+
+    location = /health {
+        proxy_pass http://ops_terminal_gateway;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $http_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        access_log off;
+    }
+
+    # ---- internal auth subrequest used by auth_request -------------------
+    location = /_ops_auth {
+        internal;
+        proxy_pass http://ops_terminal_gateway/auth-check;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header X-Forwarded-For $http_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+
+    # ---- authenticated account endpoints (gateway) -----------------------
+    location ~ ^/(logout|change-password|whoami)$ {
+        auth_request /_ops_auth;
+        error_page 401 = @ops_to_login;
+        error_page 403 = @ops_to_login;
+        proxy_pass http://ops_terminal_gateway;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $http_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+    }
+
+    # ---- the terminal itself (ttyd: pages + WebSocket) -------------------
+    location / {
+        auth_request /_ops_auth;
+        error_page 401 = @ops_to_login;
+        error_page 403 = @ops_to_login;
+
+        proxy_pass http://ops_terminal_ttyd;
+        proxy_http_version 1.1;
+        # $http_host keeps the original port (if any) so ttyd's
+        # --check-origin Host/Origin comparison matches exactly.
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $http_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $ops_connection_upgrade;
+        # long-lived interactive sessions
+        proxy_read_timeout 7d;
+        proxy_send_timeout 7d;
+        proxy_buffering off;
+        proxy_request_buffering off;
+    }
+
+    location @ops_to_login {
+        return 302 /login;
+    }
+}
+# ====================== end HANASO OPS Web Terminal =======================

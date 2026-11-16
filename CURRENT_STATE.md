@@ -1,6 +1,6 @@
 # CURRENT STATE — HANASO OPS Web Terminal
 
-> آخرین به‌روزرسانی: 2026-11-16 — پایان CP6 (Release-ready)
+> آخرین به‌روزرسانی: 2026-11-16 — پایان CP7 (پشتیبانی HAProxy + رفع باگ Preflight حادثه 2026-11-16)
 > این فایل وضعیت واقعی را در هر Checkpoint ثبت می‌کند. هیچ ادعای Push/Deploy بدون تأیید نمی‌شود.
 
 ## مأموریت
@@ -30,6 +30,10 @@ Debian 13 trixie / x86_64 / کاربر uid 1001 بدون root / PID1=tini / ngin
 | D7 | فقط vhost مستقل nginx + reload (هرگز restart)؛ rollback خودکار |
 | D8 | اثبات مرورگر: Playwright + `window.term` (متن ترمینال خواندنی) + اثبات side-channel فایل |
 | D9 | اثبات ROOT در Sandbox: userns `unshare -Ur` (id -u=0 از مرورگر واقعی + WS) |
+| D10 | توپولوژی‌ها: nginx-direct + haproxy-front + haproxy-tcp-passthrough — تشخیص خودکار در Preflight |
+| D11 | HAProxy: بلوک‌های مدیریت‌شده BEGIN/END + تبدیل برگشت‌پذیر crt→crt-list + فقط `haproxy -c` و reload (هرگز restart) |
+| D12 | فایل env Preflight: سریال‌سازی امن KEY='VALUE' + پارسر سخت‌گیرانه؛ **هرگز source/eval نمی‌شود** (رفع حادثه 2026-11-16) |
+| D13 | nginx داخلی پشت HAProxy: مستقل، loopback-only، `absolute_redirect off` (جلوگیری از ریدایرکت مطلق به پورت داخلی) |
 
 ## Checkpoints
 
@@ -42,11 +46,13 @@ Debian 13 trixie / x86_64 / کاربر uid 1001 بدون root / PID1=tini / ngin
 | CP5 | تست مرورگر واقعی + باتری کامل + ROOT-proof + هاردنینگ (session revocation و...) | f1e40d0 | ✅ |
 | CP6 | مستندات کامل + SHA256SUMS + Tag v1.0.0 + Installer تست‌شده | e1fb8a1 | ✅ |
 | — | Release (SHA256SUMS + tag v1.0.0) | v1.0.0 | ✅ |
+| CP7 | پشتیبانی HAProxy (3 توپولوژی) + رفع باگ Preflight (پارسر امن) + باتری HAProxy + رگرسیون کامل | v1.1.0 | ✅ Sandbox سبز — در انتظار نصب Production |
 
 ## نتایج آزمون (خلاصه)
 
-- باتری کامل ۱۰ مرحله‌ای: **TOTAL FAILED STEPS: 0** (۴۶ PASS / ۰ FAIL) — `tests/SANDBOX_TEST_REPORT.md`
-- مرورگر واقعی (Playwright): ۸/۸ ✅ — متن ترمینال از `window.term` + اثبات فایل side-channel
+- باتری nginx-direct ۱۰ مرحله‌ای: **TOTAL FAILED STEPS: 0** (۴۶ PASS / ۰ FAIL) — `tests/SANDBOX_TEST_REPORT.md`
+- باتری HAProxy ۱۶ مرحله‌ای: **TOTAL FAILED STEPS: 0** (۸۱ PASS / ۰ FAIL) — شامل install، تبدیل برگشت‌پذیر crt→crt-list، e2e کامل از پشت TLS+SNI، مرورگر واقعی، brute-force، XFF spoof-proofing، rollback تحمیلی (شکست e2e بعد از سیم‌کشی HAProxy → بازگشت دقیق)، idempotent reinstall، uninstall و نصب نهایی — `tests/haproxy-battery.sh`
+- مرورگر واقعی (Playwright) در هر دو توپولوژی: ✅ — متن ترمینال از `window.term` + اثبات فایل side-channel
 - ROOT-proof (userns): `id -u -> 0` از مرورگر واقعی و WS ✅
 - گزارش کامل: `tests/SANDBOX_TEST_REPORT.md`
 

@@ -3,9 +3,13 @@
 پنل ترمینال تحت وب با **ROOT Shell واقعی** برای VPS مشترک HANASO — پشت احراز هویت مستقل،
 قفل Brute-Force و HTTPS روی Reverse Proxy موجود — بدون وابستگی عملیاتی به GitHub Actions، SSH از Sandbox یا Cloudflare Tunnel.
 
+## معماری — هر دو توپولوژی Reverse Proxy پشتیبانی می‌شود
+
 ```
+nginx-direct (nginx مستقیماً TLS را روی 443 خاتمه می‌دهد):
+
 مرورگر (Agent/Owner)
-   │  HTTPS (wss) — پورت 443 موجود Reverse Proxy
+   │  HTTPS (wss) — پورت 443 موجود nginx
    ▼
 nginx فعلی سرور (Virtual Host اختصاصی ops.hanaso.ir)
    │  auth_request → کوکی Session امضاشده
@@ -14,32 +18,60 @@ nginx فعلی سرور (Virtual Host اختصاصی ops.hanaso.ir)
    └──► 127.0.0.1:7681  ttyd 1.7.7 (کاربر root) → tmux session «ops» → ROOT Shell واقعی
 ```
 
+```
+haproxy-front (HAProxy مالک 443 عمومی است — توپولوژی واقعی VPS):
+
+مرورگر (Agent/Owner)
+   │  HTTPS (wss) — پورت 443 موجود HAProxy
+   ▼
+HAProxy (bind ssl مشترک kotodama.ir/hanaso.ir — دست‌نخورده باقی می‌ماند)
+   │  ACL مدیریت‌شده SNI/Host فقط برای ops.hanaso.ir
+   ▼
+nginx داخلی مستقل (127.0.0.1:7680 — کاربر ops-gw، فقط loopback)
+   │  auth_request + limit_req + WS proxy
+   ├──► 127.0.0.1:7682  ops-terminal-gateway
+   └──► 127.0.0.1:7681  ttyd 1.7.7 (root) → tmux «ops» → ROOT Shell واقعی
+```
+
+- در توپولوژی HAProxy، گواهی پنل با یکی از روش‌های **بدون‌خرابی** به HAProxy اضافه می‌شود:
+  drop-in در دایرکتوری `crt` موجود، append به `crt-list` موجود، یا تبدیل برگشت‌پذیر
+  `crt FILE` → `crt-list` (گواهی اصلی عیناً حفظ می‌شود).
+- HAProxy هرگز Restart نمی‌شود — فقط `haproxy -c` و سپس **reload**؛ ویرایش‌ها داخل
+  بلوک‌های `# BEGIN/END ops-terminal` هستند و حذف آن‌ها جراحی است.
+- توپولوژی سوم (`haproxy-tcp-passthrough`) هم پشتیبانی می‌شود: HAProxy فقط TCP جلو
+  می‌گذارد و nginx داخلی خودش TLS را خاتمه می‌دهد.
+
 ## اجزای پروژه
 
 | مسیر | شرح |
 |------|------|
 | `gateway/gateway.py` | احراز هویت مستقل (Login/Logout/Change-Password) + قفل IP + لاگ رویداد — فقط Python stdlib |
 | `vendor/` | باینری ttyd 1.7.7 + SHA256SUMS رسمی upstream |
-| `systemd/` | سرویس‌های `ops-terminal.service` (ttyd/root) و `ops-terminal-gateway.service` (ops-gw) |
-| `nginx/` | قالب Virtual Host با auth_request، WebSocket proxy، timeout طولانی، limit_req |
-| `scripts/install.sh` | Installer مستقل، Idempotent، با Preflight + Backup + Rollback خودکار |
-| `scripts/uninstall.sh` | حذف کامل و مستقل بدون آسیب به سرویس‌های مشترک |
-| `scripts/preflight.sh` | بررسی سازگاری VPS قبل از نصب (فقط-خواندنی) |
+| `systemd/` | `ops-terminal.service` (ttyd/root)، `ops-terminal-gateway.service` (ops-gw)، `ops-terminal-nginx.service` (nginx داخلی توپولوژی HAProxy) |
+| `nginx/ops-terminal.conf.template` | vhost مشترک nginx (توپولوژی nginx-direct) |
+| `nginx/ops-terminal-internal.conf.template` | nginx داخلی loopback برای پشت HAProxy |
+| `scripts/install.sh` | Installer مستقل، Idempotent — تشخیص خودکار توپولوژی + Preflight + Backup + Rollback خودکار |
+| `scripts/uninstall.sh` | حذف کامل و مستقل (هر دو توپولوژی — شامل بازگردانی دقیق بلوک‌های HAProxy) |
+| `scripts/preflight.sh` | بررسی سازگاری VPS قبل از نصب (فقط-خواندنی؛ خروجی KEY='VALUE' امن) |
+| `scripts/ops-env.sh` | سریال‌سازی/پارسر سخت‌گیرانه فایل env — هرگز source/eval نمی‌شود (درس حادثه 2026-11-16) |
+| `scripts/ops-haproxy.sh` | کتابخانه تحلیل/ویرایش جراحی haproxy.cfg (بلوک‌های مدیریت‌شده + اعتبارسنجی) |
 | `scripts/ops-terminal-passwd` | تولید/چرخش Credential بدون افشا در argv |
 | `scripts/e2e-test.py` | تست انتها-به-انتها: Login → WebSocket → اجرای دستور → Assertion |
-| `scripts/health-check.sh` | بررسی سلامت سرویس‌ها + loopback-only |
-| `tests/` | باتری کامل ۱۶ آزمون مأموریت + تست مرورگر واقعی (Playwright) + آزمون ROOT (userns) |
+| `scripts/health-check.sh` | بررسی سلامت سرویس‌ها + loopback-only (آگاه از توپولوژی) |
+| `tests/` | باتری nginx-direct (۴۶ PASS) + باتری HAProxy (۸۱ PASS) + مرورگر واقعی (Playwright) + آزمون ROOT (userns) |
 | `docs/` | مستندات نصب/امنیت/حذف/عیب‌یابی/Rollback |
 
 ## نصب سریع (Owner)
 
 دستور نهایی و تست‌شده در [`docs/INSTALL.md`](docs/INSTALL.md) ارائه شده است.
 پیش‌نیاز: رکورد A برای `ops.hanaso.ir` به IP عمومی VPS (حالت DNS Only).
+Installer توپولوژی (nginx یا HAProxy) را خودش در Preflight تشخیص می‌دهد.
 
 > ⚠️ این پنل ROOT Shell واقعی ارائه می‌کند. [`docs/SECURITY.md`](docs/SECURITY.md) را بخوانید.
 
 ## وضعیت
 
 - وضعیت لحظه‌ای: [`CURRENT_STATE.md`](CURRENT_STATE.md)
-- گزارش کامل تست Sandbox (۱۶/۱۶ + مرورگر + ROOT): [`tests/SANDBOX_TEST_REPORT.md`](tests/SANDBOX_TEST_REPORT.md)
-- باتری: `bash tests/run-battery.sh` (پس از یک نصب sandbox فعال) — آخرین نتیجه: **0 FAILED**
+- گزارش کامل تست Sandbox: [`tests/SANDBOX_TEST_REPORT.md`](tests/SANDBOX_TEST_REPORT.md)
+- باتری nginx-direct: `bash tests/run-battery.sh` — آخرین نتیجه: **0 FAILED (۴۶ PASS)**
+- باتری HAProxy: `bash tests/haproxy-battery.sh` — آخرین نتیجه: **0 FAILED (۸۱ PASS)**

@@ -1,0 +1,34 @@
+[Unit]
+Description=HANASO OPS Terminal — internal auth-gateway nginx (loopback only, behind HAProxy)
+Documentation=https://github.com/AbolfazlProg/hanaso-ops-terminal
+After=network-online.target ops-terminal-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Independent nginx instance (NOT the shared nginx of HANASO/KOTODAMA).
+# Runs unprivileged as ops-gw and listens on 127.0.0.1:7680 only; the only
+# traffic source is the HAProxy backend for the ops.hanaso.ir SNI/host ACL.
+User=ops-gw
+Group=ops-gw
+ExecStart=/usr/sbin/nginx -c /etc/ops-terminal/nginx/nginx.conf -g 'pid /var/lib/ops-terminal/nginx/nginx.pid;'
+ExecReload=/usr/sbin/nginx -c /etc/ops-terminal/nginx/nginx.conf -g 'pid /var/lib/ops-terminal/nginx/nginx.pid;' -s reload
+Restart=always
+RestartSec=2
+
+# --- hardening (non-root, no shell) ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/ops-terminal/nginx /var/lib/ops-terminal /var/log/ops-terminal
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

@@ -24,8 +24,10 @@ chk() { if [ "$1" = "OK" ]; then say OK "$2"; else say FAIL "$2"; FAIL=1; fi; }
 get() { sed -n "s/^$1=//p" "$CONF" 2>/dev/null | head -1; }
 GW_PORT="$(get GATEWAY_PORT)"; GW_PORT="${GW_PORT:-7682}"
 TD_PORT="$(get TTYD_PORT)";    TD_PORT="${TD_PORT:-7681}"
+TOPOLOGY="$(get OPS_TOPOLOGY)"; TOPOLOGY="${TOPOLOGY:-nginx-direct}"
+PANEL_PORT="$(get PANEL_LISTEN_PORT)"; PANEL_PORT="${PANEL_PORT:-7680}"
 
-echo "== HANASO OPS Web Terminal — health check =="
+echo "== HANASO OPS Web Terminal — health check (topology: $TOPOLOGY) =="
 
 if [ "$SANDBOX" = "0" ] && command -v systemctl >/dev/null 2>&1; then
   for u in ops-terminal-gateway ops-terminal; do
@@ -33,6 +35,14 @@ if [ "$SANDBOX" = "0" ] && command -v systemctl >/dev/null 2>&1; then
     elif systemctl list-unit-files "$u.service" >/dev/null 2>&1 && systemctl cat "$u" >/dev/null 2>&1; then chk FAIL "systemd: $u NOT active"
     else say INFO "systemd unit $u not installed (sandbox?)"; fi
   done
+  if [ "$TOPOLOGY" != "nginx-direct" ]; then
+    if systemctl is-active --quiet ops-terminal-nginx 2>/dev/null; then chk OK "systemd: ops-terminal-nginx active"
+    elif systemctl list-unit-files ops-terminal-nginx.service >/dev/null 2>&1; then chk FAIL "systemd: ops-terminal-nginx NOT active"
+    else say INFO "ops-terminal-nginx unit not installed"; fi
+    # shared edge (owned by the platform, not by this panel) — informational
+    if systemctl is-active --quiet haproxy 2>/dev/null; then say INFO "systemd: haproxy active"
+    else say INFO "systemd: haproxy not active (panel is unreachable externally — check the shared edge)"; fi
+  fi
 fi
 
 if curl -sf -m 5 "http://127.0.0.1:$GW_PORT/health" >/dev/null 2>&1; then
@@ -43,8 +53,16 @@ if curl -sf -m 5 "http://127.0.0.1:$TD_PORT/" -o /dev/null; then
   chk OK "ttyd page on 127.0.0.1:$TD_PORT"
 else chk FAIL "ttyd page on 127.0.0.1:$TD_PORT"; fi
 
+if [ "$TOPOLOGY" != "nginx-direct" ]; then
+  if curl -sf -m 5 "http://127.0.0.1:$PANEL_PORT/health" >/dev/null 2>&1; then
+    chk OK "internal nginx /health on 127.0.0.1:$PANEL_PORT"
+  else chk FAIL "internal nginx /health on 127.0.0.1:$PANEL_PORT"; fi
+fi
+
 # loopback binding check (never accept external binding of the raw services)
-for p in "$GW_PORT" "$TD_PORT"; do
+LB_PORTS="$GW_PORT $TD_PORT"
+[ "$TOPOLOGY" != "nginx-direct" ] && LB_PORTS="$LB_PORTS $PANEL_PORT"
+for p in $LB_PORTS; do
   if ss -tln 2>/dev/null | awk '{print $4}' | grep -E "127\.0\.0\.1:$p\$|^\[::1\]:$p\$" >/dev/null; then
     chk OK "port $p listens on loopback only"
   elif ss -tln 2>/dev/null | awk '{print $4}' | grep -E ":$p\$" >/dev/null; then
