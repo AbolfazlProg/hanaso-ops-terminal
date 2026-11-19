@@ -153,6 +153,8 @@ SCRIPT_DIR="$REPO_DIR/scripts"
 . "$SCRIPT_DIR/ops-haproxy.sh"  || die "scripts/ops-haproxy.sh missing"
 # shellcheck source=ops-systemd.sh
 . "$SCRIPT_DIR/ops-systemd.sh"  || die "scripts/ops-systemd.sh missing"
+# shellcheck source=ops-apt-mirror.sh (CP v1.3.1: mirror discovery + fallback)
+. "$SCRIPT_DIR/ops-apt-mirror.sh" || die "scripts/ops-apt-mirror.sh missing"
 
 # ------------------------------------------------------------- path layout --
 TS="$(date +%Y%m%d-%H%M%S)"
@@ -301,6 +303,8 @@ rollback() {
   ROLLED_BACK=1
   printf '\n[install][ROLLBACK] reverting changes after failure...\n' >&2
   set +e
+  # CP v1.3.1: if the mirror engine rewrote apt sources, restore them FIRST
+  apt_mirror_rollback_sources
   if [ "$SANDBOX" = "1" ]; then
     for f in gateway ttyd nginx-internal; do
       [ -f "$RUN_DIR/$f.pid" ] && kill "$(cat "$RUN_DIR/$f.pid")" 2>/dev/null
@@ -416,15 +420,40 @@ standalone_install_dependencies() {
   if [ "$TLS_MODE" = "acme" ] && ! command -v certbot >/dev/null 2>&1; then
     want+=(certbot)
   fi
+  # --- tmux: required for session persistence (was a separate bare install)
+  if ! command -v tmux >/dev/null 2>&1; then
+    want+=(tmux)
+  fi
   if [ "${#want[@]}" -gt 0 ]; then
-    note "apt: installing ${want[*]} (standalone dependencies) ..."
-    apt-get update -qq 2>/dev/null || apt-get update
+    note "apt: installing ${want[*]} (standalone dependencies) via the MIRROR ENGINE ..."
+    # CP v1.3.1: judge mirrors by REAL apt success (InRelease fetch + isolated
+    # apt-get update with apt-secure signature enforcement + package candidate
+    # check). Never trusts the update exit code (v1.3.0 production incident:
+    # 'Unable to locate package' after a silently-failing apt-get update).
+    if ! apt_mirror_engine "${want[@]}"; then
+      cat <<'EOM'
+
+[install] APT MIRROR ENGINE FAILED — no healthy Ubuntu mirror found.
+  The full APT MIRROR REPORT above lists every mirror tried and the exact
+  rejection reason. NOTHING was installed and apt sources were not modified
+  (they are restored if the engine had already rewritten them).
+  Fix connectivity (or add a reachable official mirror), then re-run.
+EOM
+      die "apt mirror engine failed for: ${want[*]} (fail-closed, zero packages installed)"
+    fi
     DEBIAN_FRONTEND=noninteractive apt-get install -y "${want[@]}" \
       || die "apt-get install failed for: ${want[*]}"
     NGX_PKGS_INSTALLED="${want[*]}"
     printf '%s\n' "${want[@]}" > "$BACKUP_DIR/apt-installed.txt"
+    # mission requirement: log the installed package versions
+    local ip iv verline=""
+    for ip in "${want[@]}"; do
+      iv="$(dpkg-query -W -f='${Version}' "$ip" 2>/dev/null || echo '?')"
+      verline="$verline $ip=$iv"
+    done
+    note "apt: installed:${verline}"
   else
-    note "standalone: nginx (with auth_request) and certbot already present — no packages to install"
+    note "standalone: nginx (with auth_request), certbot and tmux already present — no packages to install"
   fi
   # --- the distro nginx.service must not own the edge; the panel's dedicated
   #     ops-terminal-front unit owns :80/:443 exclusively on this fresh box.
@@ -442,6 +471,16 @@ standalone_install_dependencies() {
   [ -x "$NGX_BIN_PROD" ] || die "standalone: nginx binary not found after dependency install"
   "$NGX_BIN_PROD" -V 2>&1 | tr ' ' '\n' | grep -q -- --with-http_auth_request_module \
     || die "standalone: installed nginx STILL lacks http_auth_request_module ($NGX_BIN_PROD) — refusing to continue (fail-closed)"
+  # CP v1.3.1: REAL functional auth_request proof (not just a compile flag):
+  # a throwaway nginx serves /protected behind auth_request — the subrequest
+  # stub returning 401 must DENY, the stub returning 200 must ALLOW.
+  if verify_auth_request_live "$NGX_BIN_PROD"; then
+    note "auth_request LIVE test: PASS (subrequest 401 -> denied, subrequest 200 -> allowed)"
+    _amr "auth_request LIVE: PASS (401-stub denies, 200-stub allows) on a throwaway nginx instance"
+    _apt_mirror_save_report   # include the auth_request line in the archived report
+  else
+    die "standalone: auth_request LIVE test FAILED ($NGX_BIN_PROD) — the module does not answer correctly; refusing to continue (fail-closed)"
+  fi
   # D24: record the REAL binary identity in the install log
   note "nginx binary identity: $($NGX_BIN_PROD -V 2>&1 | head -1) [$($NGX_BIN_PROD -V 2>&1 | tail -1 | grep -oE 'error-log-path=[^ ]+' || echo 'error-log-path=(default)')]"
   if [ "$TLS_MODE" = "acme" ]; then
