@@ -28,7 +28,14 @@ echo "[orch] inner relay socket present"
 echo "[orch] 4. REAL browser (Playwright/Chromium) -> https://127.0.0.1:$PORT"
 # password from the VM's one-time file (rootfs is visible from the sandbox)
 PWFILE=/tmp/cp-browser-pw.txt
-cp "$ROOTFS/root/cp13-pw.txt" "$PWFILE" && chmod 0600 "$PWFILE"
+# prefer THIS session's one-time password (a reinstall after an uninstall
+# generates a new one — only the session evidence file has it)
+if [ -s /home/z/my-project/vm-cp13/shared/evidence/.cp-session-pw.txt ]; then
+  cp /home/z/my-project/vm-cp13/shared/evidence/.cp-session-pw.txt "$PWFILE"
+else
+  cp "$ROOTFS/root/cp13-pw.txt" "$PWFILE"
+fi
+chmod 0600 "$PWFILE"
 node tests/browser-test.js \
   --url "https://127.0.0.1:$PORT" \
   --map-host ops.hanaso.ir \

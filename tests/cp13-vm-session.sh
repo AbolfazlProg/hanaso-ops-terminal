@@ -8,6 +8,10 @@ echo "[session] idempotent reinstall (re-renders configs from the CURRENT repo).
 bash /root/hanaso-ops-terminal/scripts/install.sh --yes --domain ops.hanaso.ir \
   --server-ip 127.0.0.1 --tls-mode self-signed > /mnt/shared/evidence/session-reinstall.log 2>&1 \
   && echo "[session] reinstall OK" || { echo "[session] REINSTALL FAILED"; tail -20 /mnt/shared/evidence/session-reinstall.log; }
+# the one-time password (if this run generated one) -> shared evidence (0600)
+sed -n 's/^ PASSWORD    : //p' /mnt/shared/evidence/session-reinstall.log | head -1 \
+  > /mnt/shared/evidence/.cp-session-pw.txt
+chmod 0600 /mnt/shared/evidence/.cp-session-pw.txt 2>/dev/null || true
 echo "[session] starting panel services..."
 systemctl enable --now ops-terminal-gateway.service ops-terminal.service \
   ops-terminal-nginx.service ops-terminal-front.service 2>/dev/null || true
