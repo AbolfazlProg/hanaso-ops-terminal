@@ -25,6 +25,15 @@ done
 [ -S /home/z/my-project/vm-cp13/shared/cp13.sock ] || { echo "FATAL: relay socket never appeared"; cat /tmp/cp-session.log; kill $OUTER_PID $SESS_PID 2>/dev/null; exit 1; }
 echo "[orch] inner relay socket present"
 
+echo "[orch] 3b. health-check the FULL relay chain (TLS through both relays)"
+CHAIN_OK=0
+for i in $(seq 1 30); do
+  CODE=$(curl -sk -m 5 -o /dev/null -w '%{http_code}' "https://127.0.0.1:$PORT/login" 2>/dev/null)
+  if [ "$CODE" = "200" ]; then CHAIN_OK=1; echo "[orch] chain healthy (https $CODE)"; break; fi
+  sleep 2
+done
+[ "$CHAIN_OK" = "1" ] || { echo "FATAL: relay chain never became healthy (last code=$CODE)"; tail -6 /tmp/cp-session.log /tmp/cp-outer.log 2>/dev/null; kill $OUTER_PID $SESS_PID 2>/dev/null; exit 1; }
+
 echo "[orch] 4. REAL browser (Playwright/Chromium) -> https://127.0.0.1:$PORT"
 # password from the VM's one-time file (rootfs is visible from the sandbox)
 PWFILE=/tmp/cp-browser-pw.txt
