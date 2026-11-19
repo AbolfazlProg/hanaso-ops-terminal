@@ -151,5 +151,45 @@ subprocess.run(
      "-addext", "subjectAltName=DNS:wrong.example.com"],
     check=True, capture_output=True)
 print("[mock] tls-broken cert built (CN=wrong.example.com)")
+
+# flat offline mirror (/opt/mirror, CP13 legacy): give it SIGNED metadata too.
+# The engine never honors trusted=yes — an unsigned flat repo can never pass
+# a strict probe, so the CP13 image mirror gets a real signed Release/InRelease
+# (same test key; the VM keyrings already trust it).
+flat = "/home/z/my-project/vm-cp13/mirror"
+pkgs = os.path.join(flat, "Packages")
+if os.path.exists(pkgs):
+    md5_l, s256_l, s512_l = [], [], []
+    rels = ["Packages", "Packages.gz"]
+    for rel in rels:
+        f = os.path.join(flat, rel)
+        if not os.path.exists(f):
+            continue
+        data = open(f, "rb").read()
+        md5_l.append(" %s %8d %s" % (hashlib.md5(data).hexdigest(), len(data), rel))
+        s256_l.append(" %s %8d %s" % (hashlib.sha256(data).hexdigest(), len(data), rel))
+        s512_l.append(" %s %8d %s" % (hashlib.sha512(data).hexdigest(), len(data), rel))
+    rel_txt = (
+        "Origin: Ubuntu\n"
+        "Label: Ubuntu\n"
+        "Suite: ./\n"
+        "Codename: ./\n"
+        f"Date: {time.strftime('%a, %d %b %Y %H:%M:%S UTC', time.gmtime())}\n"
+        "Architectures: amd64\n"
+        "Components: main\n"
+        "Description: Ubuntu 24.04 LTS (CP13 offline flat mirror, signed for the CP engine)\n"
+        "MD5Sum:\n" + "\n".join(md5_l) + "\n"
+        "SHA256:\n" + "\n".join(s256_l) + "\n"
+        "SHA512:\n" + "\n".join(s512_l) + "\n"
+    )
+    open(os.path.join(flat, "Release"), "w").write(rel_txt)
+    subprocess.run(
+        ["gpg", "--batch", "--yes", "--clearsign", "--digest-algo", "SHA256",
+         "--local-user", "cp-mirror-test@invalid",
+         "--output", os.path.join(flat, "InRelease"),
+         os.path.join(flat, "Release")],
+        check=True, capture_output=True)
+    print("[mock] flat /opt/mirror mirror signed (Release+InRelease)")
+
 print("[mock] MOCKS_DONE")
 PYEOF
