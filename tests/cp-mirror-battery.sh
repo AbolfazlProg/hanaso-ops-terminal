@@ -430,7 +430,7 @@ EOF
   assert "M8-2-components-include-universe" bash -c 'grep -q "Components: main universe" /etc/apt/sources.list.d/00-hanaso-mirror.sources'
   assert "M8-2-installed" bash -c 'dpkg -l nginx 2>/dev/null | grep -q "^ii" && dpkg -l certbot 2>/dev/null | grep -q "^ii"'
   step M8-3 "real apt NEVER prints the 'Ignoring file' warning (v1.3.2 core fix)"
-  assert "M8-3-apt-no-ignoring-warning" bash -c 'out=$(apt-get update 2>&1 || true); printf "%s" "$out" | grep -qi "Ignoring file" && return 1 || return 0'
+  assert "M8-3-apt-no-ignoring-warning" bash -c 'out=$(apt-get update 2>&1 || true); ! printf "%s" "$out" | grep -qi "Ignoring file"'
   assert "M8-3-install-log-no-ignoring" bash -c '! grep -qi "Ignoring file" "$LOGDIR/M8-install.log"'
   ;;
 

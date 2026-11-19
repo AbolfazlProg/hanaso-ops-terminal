@@ -250,7 +250,7 @@ EOF
   assert "A2-2-no-invalid-suffix" bash -c '! ls /etc/apt/sources.list.d/*.disabled-by-ops-terminal >/dev/null 2>&1'
   assert "A2-2-engine-sources-active" test -f /etc/apt/sources.list.d/00-hanaso-mirror.sources
   step A2-3 "REAL apt never prints the Ignoring-file warning"
-  assert "A2-3-apt-no-ignoring" bash -c 'out=$(apt-get update 2>&1 || true); printf "%s" "$out" | grep -qi "Ignoring file" && return 1 || return 0'
+  assert "A2-3-apt-no-ignoring" bash -c 'out=$(apt-get update 2>&1 || true); ! printf "%s" "$out" | grep -qi "Ignoring file"'
   assert "A2-3-install-log-no-ignoring" bash -c '! grep -qi "Ignoring file" "$LOGDIR/A2-install.log"'
   step A2-4 "rollback restores the original EXACTLY (byte-identical mv-back)"
   cp -a "$BD/apt-backup/disabled/ubuntu.sources" /root/a2-orig-ref.sources
@@ -288,10 +288,10 @@ EOF
   assert "A3-2-legacy-preserved" test -f "$BD/apt-backup/disabled/legacy/ubuntu.sources.disabled-by-ops-terminal"
   assert "A3-2-sweep-logged" grep -q "legacy cleanup: relocated" "$LOGDIR/A3-install.log"
   step A3-3 "the Ignoring-file warning NEVER returns (apt + rollback)"
-  assert "A3-3-apt-no-ignoring" bash -c 'out=$(apt-get update 2>&1 || true); printf "%s" "$out" | grep -qi "Ignoring file" && return 1 || return 0'
+  assert "A3-3-apt-no-ignoring" bash -c 'out=$(apt-get update 2>&1 || true); ! printf "%s" "$out" | grep -qi "Ignoring file"'
   engine_rollback "$BD" || true
   assert "A3-3-rollback-no-resurrect" bash -c '! ls /etc/apt/sources.list.d/*.disabled-by-ops-terminal >/dev/null 2>&1'
-  assert "A3-3-rollback-no-ignoring" bash -c 'out=$(apt-get update 2>&1 || true); printf "%s" "$out" | grep -qi "Ignoring file" && return 1 || return 0'
+  assert "A3-3-rollback-no-ignoring" bash -c 'out=$(apt-get update 2>&1 || true); ! printf "%s" "$out" | grep -qi "Ignoring file"'
   ;;
 
 A4) # ---- third-party repositories are never touched -----------------------
