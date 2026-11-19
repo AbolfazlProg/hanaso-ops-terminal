@@ -437,6 +437,11 @@ verify_auth_request_live() { # <nginx-binary> -> REAL functional proof
   [ "$try_ok" = "1" ] || return 1
   tmp="$(mktemp -d /tmp/ops-authreq.XXXXXX)" || return 1
   conf="$tmp/test.conf"
+  # the protected location must do REAL content-phase work (a static file):
+  # 'return' runs in the rewrite phase BEFORE the access phase and would make
+  # auth_request a no-op (401-stub would wrongly answer 200).
+  mkdir -p "$tmp/htdocs"
+  printf 'AUTHREQ-LIVE-OK\n' > "$tmp/htdocs/protected"
   cat > "$conf" <<EOF
 pid $tmp/nginx.pid;
 error_log $tmp/error.log error;
@@ -447,12 +452,12 @@ http {
   server {
     listen 127.0.0.1:$p1;
     location = /_auth { return 401; }
-    location = /protected { auth_request /_auth; return 200; }
+    location = /protected { auth_request /_auth; root $tmp/htdocs; }
   }
   server {
     listen 127.0.0.1:$p2;
     location = /_auth { return 200; }
-    location = /protected { auth_request /_auth; return 200; }
+    location = /protected { auth_request /_auth; root $tmp/htdocs; }
   }
 }
 EOF
