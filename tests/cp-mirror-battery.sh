@@ -269,8 +269,8 @@ M1) # ---- incident replay: EMPTY sources + EMPTY index -----------------------
   step M1-5 "sources rewritten (list style) + backup + report file"
   assert "M1-5-engine-list" test -f /etc/apt/sources.list.d/00-hanaso-mirror.list
   assert "M1-5-no-trusted" bash -c '! grep -rE "trusted=yes|trusted \[yes\]" /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null | grep -v "disabled-by-ops-terminal" | grep -q .'
-  assert "M1-5-backup-dir" bash -c '[ -d "$(latest_backup_dir)/apt-backup" ]'
-  assert "M1-5-report-file" bash -c '[ -s "$(latest_backup_dir)/apt-mirror-report.txt" ]'
+  assert "M1-5-backup-dir" bash -c 'B="$(ls -1d /var/backups/ops-terminal/* 2>/dev/null | sort | tail -1)"; [ -n "$B" ] && [ -d "$B/apt-backup" ]'
+  assert "M1-5-report-file" bash -c 'B="$(ls -1d /var/backups/ops-terminal/* 2>/dev/null | sort | tail -1)"; [ -n "$B" ] && [ -s "$B/apt-mirror-report.txt" ] && grep -q "APT MIRROR REPORT" "$B/apt-mirror-report.txt"'
   assert "M1-5-e2e-passed" grep -q "end-to-end verification PASSED" "$LOGDIR/M1-install.log"
   ;;
 
