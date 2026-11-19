@@ -59,6 +59,13 @@ reset_vm() {
          /etc/logrotate.d/ops-terminal
   rm -f /etc/systemd/system/ops-terminal-* /usr/bin/systemctl.real.2>/dev/null
   rm -rf /run/cp13-ctl && mkdir -p /run/cp13-ctl
+  # CP v1.3.1: the mirror-engine battery may leave its apt state behind — the
+  # CP13 scenarios assume the plain CP13 flat-mirror configuration
+  printf 'deb [trusted=yes] file:/opt/mirror ./\n' > /etc/apt/sources.list
+  rm -f /etc/apt/sources.list.d/00-hanaso-mirror.* \
+        /etc/apt/sources.list.d/*.disabled-by-ops-terminal
+  rm -rf /var/lib/apt/lists/*; mkdir -p /var/lib/apt/lists/partial
+  apt-get update >>"$LOGDIR/purge.log" 2>&1 || true
   hash -r
   true
 }
