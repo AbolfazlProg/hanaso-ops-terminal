@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/ma
 **پین‌کردن به نسخه منتشرشده (توصیه‌شده برای VPS)** — به‌جای شاخه `main`، خود URL خام را به Tag پین کنید:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.3.1/quick-install.sh \
+curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.3.2/quick-install.sh \
   | bash -s -- --domain ops.hanaso.ir --acme-email admin@hanaso.ir
 ```
 
@@ -64,6 +64,24 @@ curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1
 | `OPS_APT_MAX_MIRRORS` | سقف کاندیدها پس از کشف (پیش‌فرض ۱۰) |
 | `OPS_APT_EXTRA_UBUNTU_HOSTS="host1 host2"` | اگر Provider شما Mirror سفارشی Ubuntu با host غیراستاندارد دارد، آن را اعلام کنید تا مثل مخازن OS مدیریت شود (بدون اعلام، hostهای ناشناخته دست‌نخورده می‌مانند) |
 
+## تست زنده auth_request ضد false-negative (جدید در v1.3.2)
+
+قبل از ادامه نصب، Installer با **باینری واقعی nginx نصب‌شده** یک آزمون مستقل اجرا می‌کند (`verify_auth_request_live` در `scripts/ops-apt-mirror.sh`):
+
+- اول از `nginx -V` فلاگ کامپایل `--with-http_auth_request_module` را تشخیص می‌دهد (auth_request در بسته توزیع **Built-in** است؛ هیچ `load_module` تولید نمی‌شود، هیچ `.so` جداگانه‌ای لازم نیست و هیچ بسته اضافه‌ای مثل `libnginx-mod-*` نصب نمی‌شود).
+- سپس یک نمونه nginx دورریز با کانفیگ/pid/log/وب‌روت **موقت و مستقل** بالا می‌آید که فقط روی **دو پورت loopback** گوش می‌دهد (هرگز :80/:443 عمومی، هیچ تغییری در کانفیگ اصلی nginx).
+- **مسیر Deny**: subrequest احراز هویت پاسخ 401 → درخواست اصلی باید **HTTP 401** بدهد؛ **مسیر Allow**: subrequest پاسخ 200 → درخواست اصلی باید **HTTP 200** بدهد **و محتوای واقعی فایل حفاظت‌شده تحویل شود** (اثبات فقط status نیست). صرف `nginx -t` هرگز کافی نیست.
+- حادثه v1.3.1: در نصب واقعی root، دایرکتوری موقت با `mktemp -d` (permission 700) ساخته می‌شد؛ nginx worker با privilege-drop (www-data/nobody) نمی‌توانست از آن عبور کند و مسیر Allow به‌جای 200 پاسخ **403** می‌داد → تست به‌اشتباه «FAILED» گزارش می‌کرد در حالی‌که ماژول کاملاً سالم بود. v1.3.2 وب‌روت موقت را 0755/0644 می‌کند (برای هر هویت worker صحیح است)، اثبات محتوا اضافه می‌کند و در صورت شکست، **تشخیص دقیق گام‌به‌گام** (کد واقعی دریافتی + دم error.log) چاپ می‌شود. بازتولید تجربی با باینری production (nginx/1.24.0 Ubuntu): Deny=401، Allow=403 قبل از fix؛ Deny=401، Allow=200+محتوا بعد از fix.
+- در شکست، Installer fail-closed می‌ایستد و هیچ تغییری ناتمام نمی‌ماند.
+
+## Backup منابع APT خارج از sources.list.d (اصلاح v1.3.2)
+
+هشدار واقعی Production: `N: Ignoring file 'ubuntu.sources.disabled-by-ops-terminal'` — نسخه قبلی فایل deb822 اصلی را با پسوند نامعتبر **در همان پوشه** `sources.list.d` نگه می‌داشت. از v1.3.2:
+
+- فایل اصلی `ubuntu.sources` به‌طور کامل از `sources.list.d` **به دایرکتوری Backup** (`/var/backups/ops-terminal/<ts>/apt-backup/disabled/`) منتقل می‌شود — apt هرگز فایل با پسوند نامعتبر نمی‌بیند.
+- پس از شکست، Rollback فایل اصلی را **بایت‌به‌بایت** به همان مکان برمی‌گرداند (mv دقیق).
+- بقایای نصب‌های قدیمی (`*.disabled-by-ops-terminal`) در شروع هر اجرای جدید **سweep** می‌شوند (به `disabled/legacy/`) تا هشدار Production دیگر هرگز ظاهر نشود؛ اصل فایل‌ها حفظ می‌شود و هیچ مخزن معتبر دیگری حذف/لمس نمی‌شود.
+
 ## نصب مستقل روی Ubuntu تازه (standalone — v1.3.0؛ موتور Mirror از v1.3.1)
 
 سرور مقصد فقط باید این‌ها را داشته باشد: Ubuntu 22.04/24.04، دسترسی root، systemd فعال و DNS که
@@ -73,8 +91,8 @@ nginx، ماژول auth_request، Certbot، Listener مناسب HTTPS، گواه
 دستور نصب (روی VPS، به‌عنوان root):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.3.1/quick-install.sh \
-  | QUICK_INSTALL_REF=v1.3.1 bash -s -- --domain ops.hanaso.ir --yes
+curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.3.2/quick-install.sh \
+  | QUICK_INSTALL_REF=v1.3.2 bash -s -- --domain ops.hanaso.ir --yes
 ```
 
 Installer در توپولوژی standalone این ۱۳ گام را خودش انجام می‌دهد:

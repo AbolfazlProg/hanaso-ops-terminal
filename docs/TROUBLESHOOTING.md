@@ -192,6 +192,22 @@ HANASO/KOTODAMA ممنوع است) و اجرای nginx به‌عنوان root ب
 در standalone چهار سرویس پنل فعال‌اند: `ops-terminal-front` + `ops-terminal-nginx` + `ops-terminal-gateway` + `ops-terminal`؛
 سرویس `nginx` توزیع باید disabled باشد (`systemctl is-enabled nginx` → disabled).
 
+
+## حادثه «auth_request LIVE test FAILED» روی نصب واقعی (رفع در v1.3.2)
+
+**علامت:** نصب standalone روی Ubuntu تازه با این خطا متوقف شد، در حالی که `nginx -V` فلاگ `--with-http_auth_request_module` را داشت، `nginx -t` روی کانفیگ‌های موجود سالم بود و هیچ ماژول dynamic/بسته‌ای (`libnginx-mod-*`) هم موضوعیت نداشت:
+
+```text
+[install][FATAL] standalone: auth_request LIVE test FAILED
+(/usr/sbin/nginx) — the module does not answer correctly
+```
+
+**ریشه (با بازتولید تجربی با باینری واقعی nginx/1.24.0 Ubuntu اثبات شد):** تست زنده v1.3.1 وب‌روت موقت خود را با `mktemp -d` می‌ساخت (permission **700**، مالک root چون Installer با root اجرا می‌شود). در نصب واقعی، nginx worker با privilege-drop به کاربر توزیع (`www-data`/`nobody`) منتقل می‌شود — **غیرمالک** است و نمی‌تواند از دایرکتوری 700 عبور کند → content phase فایل حفاظت‌شده را با `open(): Permission denied` باز نمی‌کند → مسیر Allow به‌جای 200 پاسخ **403** می‌دهد → تست کل آزمون را FAIL اعلام می‌کرد در حالی که ماژول auth_request کاملاً سالم بود (false negative). باتری VM این را نمی‌دید چون rootfs فیکسچر آزمایشی، `www-data`/`nobody` را uid 0 می‌بیند (آرتیفکت userns) و worker همان root می‌ماند.
+
+**راه‌حل (v1.3.2):** وب‌روت موقت تست با permission **0755/0644** ساخته می‌شود (برای هر هویت worker صحیح است)؛ اثبات محتوای واقعی سرو‌شده هم اضافه شد؛ در شکست، تشخیص دقیق (expected-vs-got + دم error.log) گزارش می‌شود. تست همچنان فقط دو Listener موقت loopback دارد، هیچ تغییری در کانفیگ اصلی nginx نمی‌دهد و در شکست fail-closed می‌ایستد.
+
+همچنین در همان نسخه: هشدار `N: Ignoring file 'ubuntu.sources.disabled-by-ops-terminal'` رفع شد — فایل‌های deb822 غیرفعال‌شده دیگر با پسوند نامعتبر داخل `sources.list.d` نمی‌مانند و به دایرکتوری Backup منتقل می‌شوند؛ Rollback آن‌ها را بایت‌به‌بایت برمی‌گرداند.
+
 ## حادثه «Unable to locate package nginx/certbot» (رفع در v1.3.1)
 
 **علامت:** روی Ubuntu تازه، Installer با این خطا می‌میرد:
