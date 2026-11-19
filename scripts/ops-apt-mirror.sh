@@ -239,18 +239,20 @@ _apt_update_reason() { # <log-file> -> short failure reason
 }
 
 # ------------------------------------------------------------ discovery --
-_apt_discover_candidates() { # fills APT_MIRROR_CANDIDATES (array of URIs)
-  local src uris n
+_apt_discover_candidates() { # fills APT_MIRROR_CANDIDATES (triples uri|suite|comps)
+  local uris n u t
   APT_MIRROR_CANDIDATES=()
   APT_MIRROR_SRC_NOTE=()
 
   if [ -n "${OPS_APT_FORCE_MIRRORS:-}" ]; then
     # Test-only override (battery scenarios). Documented in the file header.
-    read -r -a _f <<< "${OPS_APT_FORCE_MIRRORS}"
-    for src in "${_f[@]}"; do
-      APT_MIRROR_CANDIDATES+=("$(_apt_trim_slash "$src")")
+    # Entries are plain URIs; they get the system codename + main universe.
+    local _f=() _c
+    read -r -a _f <<< "${OPS_APT_FORCE_MIRRORS}" || true
+    for _c in "${_f[@]}"; do
+      APT_MIRROR_CANDIDATES+=("$(_apt_trim_slash "$_c")|${APT_DISC_SUITE:-}|${APT_DISC_COMPS:-main universe}")
     done
-    APT_MIRROR_SRC_NOTE+=("forced-list(${#APT_MIRROR_CANDIDATES[@]} uris — test override)")
+    APT_MIRROR_SRC_NOTE+=("forced-list(${#_f[@]} uris — test override)")
     return 0
   fi
 
@@ -260,7 +262,7 @@ _apt_discover_candidates() { # fills APT_MIRROR_CANDIDATES (array of URIs)
     n=0
     while IFS= read -r u; do
       [ -n "$u" ] || continue
-      APT_MIRROR_CANDIDATES+=("$(_apt_trim_slash "$u")"); n=$((n+1))
+      APT_MIRROR_CANDIDATES+=("$(_apt_trim_slash "$u")|${APT_DISC_SUITE:-}|${APT_DISC_COMPS:-main universe}"); n=$((n+1))
       [ "$n" -ge 12 ] && break
     done <<< "$uris"
     APT_MIRROR_SRC_NOTE+=("mirrors.ubuntu.com(mirror-discovery, $n uris)")
@@ -276,7 +278,7 @@ _apt_discover_candidates() { # fills APT_MIRROR_CANDIDATES (array of URIs)
     n=0
     while IFS= read -r u; do
       [ -n "$u" ] || continue
-      APT_MIRROR_CANDIDATES+=("$(_apt_trim_slash "$u")"); n=$((n+1))
+      APT_MIRROR_CANDIDATES+=("$(_apt_trim_slash "$u")|${APT_DISC_SUITE:-}|${APT_DISC_COMPS:-main universe}"); n=$((n+1))
       [ "$n" -ge 15 ] && break
     done <<< "$uris"
     APT_MIRROR_SRC_NOTE+=("launchpad-registry($n uris)")
@@ -287,24 +289,25 @@ _apt_discover_candidates() { # fills APT_MIRROR_CANDIDATES (array of URIs)
   # source 3: static fallback — official Canonical-operated geo mirrors +
   # launchpad-registered community mirrors (each verified serving
   # dists/noble/InRelease at release time; list is deliberately diverse).
+  local D_S="${APT_DISC_SUITE:-}" D_C="${APT_DISC_COMPS:-main universe}"
   APT_MIRROR_CANDIDATES+=(
-    "http://archive.ubuntu.com/ubuntu"
-    "http://security.ubuntu.com/ubuntu"
-    "http://ir.archive.ubuntu.com/ubuntu"
-    "http://de.archive.ubuntu.com/ubuntu"
-    "http://fr.archive.ubuntu.com/ubuntu"
-    "http://uk.archive.ubuntu.com/ubuntu"
-    "http://us.archive.ubuntu.com/ubuntu"
-    "http://jp.archive.ubuntu.com/ubuntu"
-    "http://mirrors.us.kernel.org/ubuntu"
-    "http://mirror.us.leaseweb.net/ubuntu"
-    "http://mirror.nl.leaseweb.net/ubuntu"
-    "http://ubuntu.osuosl.org/ubuntu"
-    "http://mirrors.tuna.tsinghua.edu.cn/ubuntu"
-    "http://mirror.yandex.ru/ubuntu"
-    "http://mirrors.cat.pdx.edu/ubuntu"
+    "http://archive.ubuntu.com/ubuntu|$D_S|$D_C"
+    "http://security.ubuntu.com/ubuntu|$D_S|$D_C"
+    "http://ir.archive.ubuntu.com/ubuntu|$D_S|$D_C"
+    "http://de.archive.ubuntu.com/ubuntu|$D_S|$D_C"
+    "http://fr.archive.ubuntu.com/ubuntu|$D_S|$D_C"
+    "http://uk.archive.ubuntu.com/ubuntu|$D_S|$D_C"
+    "http://us.archive.ubuntu.com/ubuntu|$D_S|$D_C"
+    "http://jp.archive.ubuntu.com/ubuntu|$D_S|$D_C"
+    "http://mirrors.us.kernel.org/ubuntu|$D_S|$D_C"
+    "http://mirror.us.leaseweb.net/ubuntu|$D_S|$D_C"
+    "http://mirror.nl.leaseweb.net/ubuntu|$D_S|$D_C"
+    "http://ubuntu.osuosl.org/ubuntu|$D_S|$D_C"
+    "http://mirrors.tuna.tsinghua.edu.cn/ubuntu|$D_S|$D_C"
+    "http://mirror.yandex.ru/ubuntu|$D_S|$D_C"
+    "http://mirrors.cat.pdx.edu/ubuntu|$D_S|$D_C"
   )
-  APT_MIRROR_SRC_NOTE+=("static-fallback(${#APT_MIRROR_CANDIDATES[@]} total candidates before dedupe)")
+  APT_MIRROR_SRC_NOTE+=("static-fallback(15 uris)")
 }
 
 # -------------------------------------------------------------- apply stage --
@@ -497,6 +500,8 @@ apt_mirror_engine() {
   fi
   suite="$codename"
   comps_probe="main universe"
+  APT_DISC_SUITE="$codename"      # discovery candidates use the system codename
+  APT_DISC_COMPS="main universe"
   # operator-declared custom Ubuntu mirror hosts (provider images)
   APT_UBUNTU_EXTRA_HOST_RES=""
   APT_UBUNTU_AWK_RE="___never___"      # NEVER an empty regex (would match all)
@@ -525,10 +530,15 @@ apt_mirror_engine() {
   _amr "rewrite-components: ${comps:-(none seen)} (probe components: $comps_probe)"
 
   # ---- stage 0: candidates ----
-  local cur_uris=() seen=" " cands=() u dup
-  while IFS='|' read -r e s u; do
+  # cur_uris: plain URIs (selection bookkeeping); cur_triples: "uri|suite|comps"
+  # probed with their OWN suite/components — a flat './' local mirror is NOT
+  # the codename suite.
+  local cur_uris=() cur_triples=() seen=" " cands=() u e s c
+  while IFS='|' read -r e s c; do
     for u in $e; do
-      cur_uris+=("$(_apt_trim_slash "$u")")
+      u="$(_apt_trim_slash "$u")"
+      cur_uris+=("$u")
+      cur_triples+=("$u|$s|$c")
     done
   done < <(_apt_current_entries)
   [ "${#cur_uris[@]}" -gt 0 ] && _amr "candidate-source current-config: ${#cur_uris[@]} uri(s)"
@@ -539,32 +549,38 @@ apt_mirror_engine() {
     _amr "candidate-source $note"
   done
 
-  # dedupe: current-config first, then discovery order; cap APT_MAX_MIRRORS
+  # dedupe (by URI): current-config first, then discovery order; cap APT_MAX_MIRRORS
+  # every candidate is a TRIPLE "uri|suite|comps" — current-config entries are
+  # probed with their OWN suite/components (a flat ./ mirror is NOT noble)
   cands=()
-  for u in "${cur_uris[@]}"; do
-    case "$seen" in *" $u "*) ;; *) cands+=("$u"); seen="$seen$u " ;; esac
+  for t in "${cur_triples[@]}"; do
+    u="${t%%|*}"
+    case "$seen" in *" $u "*) ;; *) cands+=("$t"); seen="$seen$u " ;; esac
   done
-  for u in "${APT_MIRROR_CANDIDATES[@]:-}"; do
+  for t in "${APT_MIRROR_CANDIDATES[@]:-}"; do
     [ "${#cands[@]}" -ge "$APT_MAX_MIRRORS" ] && break
-    [ -n "$u" ] || continue
-    case "$seen" in *" $u "*) ;; *) cands+=("$u"); seen="$seen$u " ;; esac
+    [ -n "$t" ] || continue
+    u="${t%%|*}"
+    case "$seen" in *" $u "*) ;; *) cands+=("$t"); seen="$seen$u " ;; esac
   done
-  _amr "probe queue (${#cands[@]}): ${cands[*]:-}"
+  _amr "probe queue (${#cands[@]}): $(printf '%s ' "${cands[@]}" | sed 's/|[^|]*|[^|]*//g;s/  */ /g')"
 
   # ---- probe loop: REAL apt decides ----
-  local sel="" start dur logf reason cand_ver
-  for u in "${cands[@]}"; do
+  local sel="" sel_suite="" sel_comps="" start dur logf reason cand_ver
+  local c_u c_suite c_comps
+  for t in "${cands[@]}"; do
+    IFS='|' read -r c_u c_suite c_comps <<< "$t"
     start="$(date +%s)"
-    if ! _apt_probe_release "$u" "$suite"; then
+    if ! _apt_probe_release "$c_u" "${c_suite:-$suite}"; then
       reason="${_APT_PROBE_REASON:-release metadata fetch failed}"
-      _amr "TEST $u -> REJECT reason=$reason"
+      _amr "TEST $c_u -> REJECT reason=$reason"
       continue
     fi
     logf="$(mktemp /tmp/ops-aptup.XXXXXX)"
     local probe_list probe_lists
     probe_list="$(mktemp /tmp/ops-aptlist.XXXXXX)"
     probe_lists="$(mktemp -d /tmp/ops-aptlists.XXXXXX)"
-    printf 'deb %s %s %s\n' "$u" "$suite" "$comps_probe" > "$probe_list"
+    printf 'deb %s %s %s\n' "$c_u" "${c_suite:-$suite}" "${c_comps:-$comps_probe}" > "$probe_list"
     mkdir -p "$probe_lists/partial"
     if timeout "$APT_UPDATE_TIMEOUT" apt-get update \
          -o Dir::Etc::sourcelist="$probe_list" \
@@ -576,21 +592,21 @@ apt_mirror_engine() {
            -o Dir::Etc::sourcelist="$probe_list" \
            -o Dir::Etc::sourceparts=/dev/null; then
         dur=$(( $(date +%s) - start ))
-        _amr "TEST $u -> PASS (apt-get update OK in ${dur}s, signatures verified by apt-secure, all ${#want[@]} package(s) present)"
+        _amr "TEST $c_u -> PASS (apt-get update OK in ${dur}s, signatures verified by apt-secure, all ${#want[@]} package(s) present)"
         cand_ver="$(_apt_candidates_line "${want[@]}" \
                       -o Dir::State::lists="$probe_lists" \
                       -o Dir::Etc::sourcelist="$probe_list" \
                       -o Dir::Etc::sourceparts=/dev/null)"
-        _amr "candidates($u): $cand_ver"
-        sel="$u"
+        _amr "candidates($c_u): $cand_ver"
+        sel="$c_u"; sel_suite="${c_suite:-$suite}"; sel_comps="${c_comps:-$comps_probe}"
         rm -f "$logf" "$probe_list"; rm -rf "$probe_lists"
         break
       fi
       reason="apt-get update OK but package candidate(s) MISSING/INCOMPLETE: $(_apt_candidates_line "${want[@]}" -o Dir::State::lists="$probe_lists" -o Dir::Etc::sourcelist="$probe_list" -o Dir::Etc::sourceparts=/dev/null 2>/dev/null || echo '?')"
-      _amr "TEST $u -> REJECT reason=$reason"
+      _amr "TEST $c_u -> REJECT reason=$reason"
     else
       reason="apt-get update failed after signature/candidate validation attempt: $(_apt_update_reason "$logf")"
-      _amr "TEST $u -> REJECT reason=$reason"
+      _amr "TEST $c_u -> REJECT reason=$reason"
     fi
     rm -f "$logf" "$probe_list"; rm -rf "$probe_lists"
   done
@@ -609,6 +625,9 @@ apt_mirror_engine() {
     # the current configuration passed the REAL apt test — zero changes
     _amr "selected mirror: $sel (CURRENT CONFIG passed — no rewrite needed)"
   else
+    # the rewrite ALWAYS writes the standard OS suites (codename, updates,
+    # backports, security) with the merged components — even when the probed
+    # entry used a narrower suite (e.g. a provider flat mirror)
     _apt_apply_selected "$sel" "$suite" "$comps" || {
       _amr "FATAL: rewriting apt sources failed — fail-closed"
       _amr "===================================================="
