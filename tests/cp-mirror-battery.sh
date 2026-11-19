@@ -107,7 +107,10 @@ reset_apt_fresh() {
   else
     git clone -q /mnt/shared/repo.git /root/hanaso-ops-terminal
   fi
-  mkdir -p /usr/local/bin /usr/libexec     # minimal VM base lacks them
+  # minimal VM base lacks the dirs a real systemd server always has
+  mkdir -p /usr/local/bin /usr/libexec \
+           /etc/systemd/system /etc/systemd/system/multi-user.target.wants \
+           /etc/logrotate.d /etc/apt/preferences.d /var/backups /var/log/apt
   cp "$REPO/tests/cp13-systemctl-shim.sh" /usr/bin/systemctl && chmod 0755 /usr/bin/systemctl
   cp "$REPO/tests/cp11-supervisor.py" /usr/libexec/cp13-supervisor.py 2>/dev/null || true
   pkill -f "cp13-supervisor" 2>/dev/null || true
