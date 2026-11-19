@@ -326,8 +326,13 @@ M5) # ---- current config has universe DISABLED ------------------------------
   apt-get update >/dev/null 2>&1 || true
   apt-cache policy certbot >/dev/null 2>&1
   step M5-1 "installer (forced healthy m1; current main-only config must be rejected)"
+  # the main-only mirror lives on a CUSTOM host (127.0.0.1) — declare it as an
+  # Ubuntu OS repo so the engine may disable it after rejection (this is the
+  # documented provider-image knob; unknown hosts are NEVER touched)
+  export OPS_APT_EXTRA_UBUNTU_HOSTS="127.0.0.1"
   run_install "$LOGDIR/M5-install.log" "$M1"
-  chk_eq "M5-1-installer-rc" 0 "$?"
+  RC=$?; unset OPS_APT_EXTRA_UBUNTU_HOSTS
+  chk_eq "M5-1-installer-rc" 0 "$RC"
   step M5-2 "engine evidence"
   assert "M5-2-current-rejected-no-universe" grep_engine "$LOGDIR/M5-install.log" | grep -E "TEST $MNU -> REJECT" >/dev/null
   assert "M5-2-m1-selected" grep -q "selected mirror: $M1" "$LOGDIR/M5-install.log"
