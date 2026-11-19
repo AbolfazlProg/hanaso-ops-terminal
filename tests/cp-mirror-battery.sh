@@ -98,6 +98,17 @@ stop_mirrors() { [ -f /tmp/cp-mirror-http.pid ] && kill "$(cat /tmp/cp-mirror-ht
 reset_apt_fresh() {
   # fresh-server apt state: flat mirror config (like the CP13 image), purge
   # panel packages, drop the mirror engine's files
+  # ALWAYS re-sync the repo clone to the CURRENT snapshot first
+  if [ -d /root/hanaso-ops-terminal/.git ]; then
+    git -C /root/hanaso-ops-terminal fetch -q origin 2>/dev/null || true
+    git -C /root/hanaso-ops-terminal reset --hard -q FETCH_HEAD 2>/dev/null || {
+      rm -rf /root/hanaso-ops-terminal
+      git clone -q /mnt/shared/repo.git /root/hanaso-ops-terminal; }
+  else
+    git clone -q /mnt/shared/repo.git /root/hanaso-ops-terminal
+  fi
+  cp "$REPO/tests/cp13-systemctl-shim.sh" /usr/bin/systemctl && chmod 0755 /usr/bin/systemctl
+  cp "$REPO/tests/cp11-supervisor.py" /usr/libexec/cp13-supervisor.py 2>/dev/null || true
   pkill -f "cp13-supervisor" 2>/dev/null || true
   pkill -f "/opt/ops-terminal" 2>/dev/null || true
   sleep 0.5
