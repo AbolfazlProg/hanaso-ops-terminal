@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/ma
 **پین‌کردن به نسخه منتشرشده (توصیه‌شده برای VPS)** — به‌جای شاخه `main`، خود URL خام را به Tag پین کنید:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.3.0/quick-install.sh \
+curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.3.1/quick-install.sh \
   | bash -s -- --domain ops.hanaso.ir --acme-email admin@hanaso.ir
 ```
 
@@ -37,7 +37,34 @@ curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1
 
 > **نکته امنیتی:** `curl | bash` به GitHub و TLS اعتماد می‌کند. برای نصب کاملاً پین‌شده و قابل‌بازبینی، مخزن را Clone کنید، `SHA256SUMS` را خودتان چک کنید و `scripts/install.sh` را مستقیم اجرا کنید (ادامه همین سند).
 
-## نصب مستقل روی Ubuntu تازه (standalone — جدید در v1.3.0)
+
+## موتور کشف و Fallback آینه‌های APT (جدید در v1.3.1)
+
+در نصب standalone، فاز نصب وابستگی‌ها (`nginx`، `certbot`، `tmux`) از `scripts/ops-apt-mirror.sh` استفاده می‌کند. درس حادثه Production: در Ubuntu 24.04 وقتی Mirror در دسترس نیست (یا sources خالی است)، `apt-get update` با **کد خروج 0** خارج می‌شود و `apt-get install` با `E: Unable to locate package` می‌میرد — پس کد خروج هرگز مدرک سلامت Mirror نیست.
+
+ترتیب داوری Mirrorها (همه با «موفقیت واقعی APT»):
+
+1. پیکربندی فعلی apt (اگر از آزمون واقعی عبور کند، هیچ تغییری انجام نمی‌شود)
+2. سرویس رسمی Mirror Discovery — `https://mirrors.ubuntu.com/mirrors.txt` (مرتب بر اساس جغرافیای سرور)
+3. رجیستری رسمی Launchpad — `https://launchpad.net/ubuntu/+archivemirrors`
+4. فهرست ثابت fallback (فقط Mirrorهای رسمی Canonical و ثبت‌شده در Launchpad)
+
+هر Mirror در سه گام واقعی آزموده می‌شود: واکشی `InRelease` → اجرای `apt-get update` **ایزوله** (فهرست‌های موقت؛ اعتبارسنجی امضا توسط خود apt-secure؛ بدون `trusted=yes` و بدون دورزدن GPG) → وجود Candidate همه بسته‌های موردنیاز از همان فهرست تازه. اولین Mirror سبز برنده است؛ دلیل رد شدن هر Mirror در گزارش ثبت می‌شود.
+
+گزارش اجرا در انتهای لاگ نصب با پیشوند `[apt-mirror]` و در فایل `apt-mirror-report.txt` داخل دایرکتوری Backup بایگانی می‌شود (فهرست Mirrorهای آزموده‌شده، دلیل رد شدن هرکدام، Mirror انتخابی، زمان `apt-get update`، نسخه Candidateها و نتیجه تست زنده auth_request). هیچ Secretی در لاگ نمی‌رود.
+
+تغییرات apt فقط روی مخازن Ubuntu انجام می‌شود (خطوط `archive.ubuntu.com`/`security.ubuntu.com`/`*.archive.ubuntu.com` و Mirrorهای محلی `file:`/`copy:` و hostهای اعلامی با متغیر زیر)؛ مخازن third-party (Docker و…) دست‌نخورده می‌مانند. از فایل‌های اصلی قبل از هر تغییری در `<backup>/apt-backup/` نسخه برداری می‌شود و Rollback نصب، apt sources را هم برمی‌گرداند. قالب deb822 (`ubuntu.sources` در Ubuntu 24.04+) و قالب تک‌خطی هر دو پشتیبانی می‌شوند؛ فایل نوشته‌شده هرگز `trusted=yes` ندارد و امضاها با keyring رسمی Ubuntu پین می‌شوند.
+
+متغیرهای محیطی (فقط برای موارد خاص):
+
+| متغیر | کاربرد |
+|---|---|
+| `OPS_APT_UPDATE_TIMEOUT` | Timeout هر `apt-get update` (پیش‌فرض ۱۲۰ ثانیه) |
+| `OPS_APT_PROBE_TIMEOUT` | Timeout واکشی InRelease (پیش‌فرض ۱۲ ثانیه) |
+| `OPS_APT_MAX_MIRRORS` | سقف کاندیدها پس از کشف (پیش‌فرض ۱۰) |
+| `OPS_APT_EXTRA_UBUNTU_HOSTS="host1 host2"` | اگر Provider شما Mirror سفارشی Ubuntu با host غیراستاندارد دارد، آن را اعلام کنید تا مثل مخازن OS مدیریت شود (بدون اعلام، hostهای ناشناخته دست‌نخورده می‌مانند) |
+
+## نصب مستقل روی Ubuntu تازه (standalone — v1.3.0؛ موتور Mirror از v1.3.1)
 
 سرور مقصد فقط باید این‌ها را داشته باشد: Ubuntu 22.04/24.04، دسترسی root، systemd فعال و DNS که
 `ops.hanaso.ir` به **همان سرور** اشاره می‌کند (A record — DNS Only). **هیچ‌کدام از این‌ها پیش‌نیاز نیست:**
@@ -46,8 +73,8 @@ nginx، ماژول auth_request، Certbot، Listener مناسب HTTPS، گواه
 دستور نصب (روی VPS، به‌عنوان root):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.3.0/quick-install.sh \
-  | QUICK_INSTALL_REF=v1.3.0 bash -s -- --domain ops.hanaso.ir --yes
+curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.3.1/quick-install.sh \
+  | QUICK_INSTALL_REF=v1.3.1 bash -s -- --domain ops.hanaso.ir --yes
 ```
 
 Installer در توپولوژی standalone این ۱۳ گام را خودش انجام می‌دهد:

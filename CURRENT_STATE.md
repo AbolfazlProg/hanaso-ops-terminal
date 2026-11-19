@@ -1,6 +1,6 @@
 # CURRENT STATE — HANASO OPS Web Terminal
 
-> آخرین به‌روزرسانی: 2026-11-19 — CP13 (نصب مستقل کامل روی Ubuntu تازه — standalone topology: بدون هیچ nginx/HAProxy/Certbot/گواهی قبلی)
+> آخرین به‌روزرسانی: 2026-11-19 — CP14 / v1.3.1 (موتور کشف و Fallback آینه‌های APT — رفع حادثه «Unable to locate package» روی Ubuntu تازه از داخل ایران)
 > این فایل وضعیت واقعی را در هر Checkpoint ثبت می‌کند. هیچ ادعای Push/Deploy بدون تأیید نمی‌شود.
 
 ## مأموریت
@@ -52,6 +52,7 @@ Debian 13 trixie / x86_64 / کاربر uid 1001 بدون root / PID1=tini / ngin
 | D30 | CP13: uninstall فقط منابع خود پروژه را حذف می‌کند (units/wants/فایل‌ها/وب‌روت/هوک LE/گواهی LE این دامنه با certbot delete/ops-gw)؛ بسته‌های توزیع پیش‌فرض می‌مانند و `--purge-packages` اختیاری است (بعد از uninstall هم قابل اجراست) |
 | D31 | CP13: محیط آزمایش — VM واقعی Ubuntu 24.04 (rootfs از بسته‌های رسمی archive.ubuntu.com؛ Python 3.12.3، tmux 3.4، systemd 255 = همان کلاس VPS) داخل userns؛ محدودیت پلتفرم (بدون cgroup قابل‌نوشتن، بدون KVM، بدون root) مثل CP12 مستند است؛ unitها با `systemd-analyze verify` واقعی Ubuntu 255 و تراکنش‌ها با supervisor وفادار به policy + shim systemctl اجرا و اثبات می‌شوند |
 | D32 | CP13: باتری CP13 = ۵ سناریو (C منفی DNS / D rollback / B مسیر ACME با stub-certbot + ACME round-trip از لبه واقعی :80 / A نصب کامل self-signed با ۵۶ چک / E uninstall) — جمعاً ۱۱۳ PASS و ۰ FAIL + مرورگر واقعی Playwright از پشت رله‌ها: ورود واقعی، `id -u` = 0، side-channel فایل، بقای session — ۸/۸ PASS |
+| D33 | CP14: فاز apt standalone فقط با «موفقیت واقعی APT» داوری می‌شود (واکشی InRelease + apt-get update ایزوله با اعتبارسنجی امضای apt-secure + وجود Candidate همه بسته‌های موردنیاز از فهرست تازه) — کد خروج `apt-get update` هرگز مدرک نیست (بازتولید تجربی: rc=0 با W: Failed to fetch، سپس E: Unable to locate package). کاندیدها به ترتیب: پیکربندی فعلی → mirrors.ubuntu.com (Mirror Discovery رسمی) → رجیستری Launchpad → فهرست ثابت رسمی/ثبت‌شده. تغییر فقط روی مخازن Ubuntu (hostهای استاندارد + file:/copy: + hostهای اعلامی OPS_APT_EXTRA_UBUNTU_HOSTS)؛ third-party هرگز لمس نمی‌شود؛ backup قبل از تغییر؛ rollback، apt sources را برمی‌گرداند؛ deb822 و تک‌خطی هر دو؛ گزارش کامل `[apt-mirror]` + apt-mirror-report.txt؛ تست زنده auth_request (subrequest 401 → deny، 200 → allow) |
 | D20 | CP11: Rollback شکست نصب: `die()` بعد از اولین تغییر → rollback کامل؛ شاخه production فقط unitهای خود پروژه را متوقف می‌کند (`scripts/ops-systemd.sh`: disable --now + TERM/KILL + reset-failed + حذف فایل‌های unit) و بلوک‌های مدیریت‌شده HAProxy را state-independent می‌جارو (بقایای runهای قبلی هم حذف و reload اعتبارسنجی‌شده) |
 
 ## Checkpoints
@@ -72,6 +73,7 @@ Debian 13 trixie / x86_64 / کاربر uid 1001 بدون root / PID1=tini / ngin
 | CP11 | HOTFIX Systemd/Nginx: PID یکتا + `daemon off` + سیاست Restart محدود + مالکیت پوشه‌ها + rollback قطع‌کننده حلقه + باتری CP11 | f437c4d (tag v1.2.2) | ✅ Push شده — `-e stderr` آن روی باینری واقعی VPS می‌مرد → CP12 |
 | CP12 | FIX نهایی سازگاری systemd/nginx: حذف `-e stderr` از unit و Installer (D21) + ثبت هویت باینری nginx در لاگ نصب (D24) + باتری CP12 (ماتریس باینری + اجرای verbatim روی Ubuntu 1.18.0 + تراکنش واقعی systemd + ۱۱ گام پذیرش + rollback + leftover-reinstall + quick-install واقعی) | 8351927 (tag v1.2.3) | ✅ ۱۰۱ PASS + رگرسیون‌ها سبز + نصب واقعی تک‌خطی از تگ GitHub (SHA OK، e2E، uninstall پاک) — Push شده |
 | CP13 | نصب مستقل Ubuntu تازه (standalone): preflight گسترش‌یافته + apt nginx/certbot + دروازه DNS + unit front با CAP_NET_BIND_SERVICE + صدور دو-فازی + self-signed/ACME + uninstall project-only + باتری ۵ سناریویی (۱۱۳ PASS/۰ FAIL) + مرورگر واقعی ۸/۸ + رفع باگ واقعی `$http_host` (check-origin ttyd) | tag v1.3.0 | ✅ Push شده |
+| CP14 | حادثه Production (`E: Unable to locate package nginx/certbot` روی VPS تازه): بازتولید تجربی ریشه روی Ubuntu 24.04 (update خراب با rc=0) + موتور کشف/Fallback آینه‌ها (scripts/ops-apt-mirror.sh: سه سرویس کشف + probe ایزوله با apt-secure + candidate check + بازنویسی deb822/تک‌خطی فقط-مخازن-Ubuntu + backup/rollback + گزارش کامل) + تست زنده auth_request + باتری موتور ۹ سناریویی (۷۰ PASS/۰ FAIL: بازپخش حادثه، fallback، index ناقص، امضای دستکاری‌شده، universe غیرفعال، DNS/TLS خراب، fail-closed همه-ناموفق، deb822، رگرسیون طبیعی) + رگرسیون CP13 کامل (۱۱۴ PASS/۰ FAIL) + مرورگر واقعی ۸/۸ + شواهد شبکه واقعی (archive.ubuntu.com timeout از شبکه آزمایش، mirrors.ubuntu.com unreachable، ir.archive.ubuntu.com 200 OK، رجیستری Launchpad با ۴۸۶ Mirror) | tag v1.3.1 | ✅ تست‌شده — Push شده |
 
 ## نتایج آزمون (خلاصه)
 
@@ -85,6 +87,10 @@ Debian 13 trixie / x86_64 / کاربر uid 1001 بدون root / PID1=tini / ngin
 - رگرسیون CP7 پس از تغییرات install.sh: باتری HAProxy **۰ FAILED** — رگرسیون baseline: باتری nginx-direct **۰ FAILED**
 - مرورگر واقعی (Playwright) در هر دو توپولوژی: ✅ — متن ترمینال از `window.term` + اثبات فایل side-channel
 - ROOT-proof (userns): `id -u -> 0` از مرورگر واقعی و WS ✅
+- باتری موتور Mirror CP14 (`tests/cp-mirror-battery.sh` روی VM تمیز Ubuntu 24.04): **۹ سناریو — ۷۰ PASS / ۰ FAIL** — M1 بازپخش دقیق حادثه (sources خالی + فهرست خالی + update بی‌صدا rc=0 → موتور نجات می‌دهد) / M2 Mirror اول مرده → دومی / M3 index ناقص (بدون universe → certbot=(none) → رد) / M4 InRelease دستکاری‌شده → رد توسط apt-secure / M5 فقط-main فعلی → رد + افزودن universe در بازنویسی / M6 DNS و TLS خراب با دلیل دقیق / M7 همه ناموفق → fail-closed با صفر اثر جانبی (sources دست‌نخورده، هیچ بسته‌ای نصب نشده، گزارش دلایل) / M8 پشتیبانی deb822 (ubuntu.sources غیرفعال، فایل .sources با Signed-By پین‌شده) / MA جریان طبیعی (current-config سالم → بدون بازنویسی)
+- رگرسیون CP13 پس از تغییرات install.sh: **۱۱۴ PASS / ۰ FAIL** (C/D/B/A/E)
+- مرورگر واقعی CP14: **۸/۸ PASS** (Chromium واقعی از پشت رله‌ها: ریدایرکت، ورود، xterm، id -u=0، hostname، side-channel فایل، کوکی re-connect، بقای tmux)
+- شواهد شبکه واقعی Sandbox (گزارش Owner): `archive.ubuntu.com` timeout، `mirrors.ubuntu.com/mirrors.txt` unreachable، `ir.archive.ubuntu.com/ubuntu/dists/noble/InRelease` → 200 OK در 2.1s، رجیستری Launchpad → ۴۸۶ Mirror ثبت‌شده
 - گزارش کامل: `tests/SANDBOX_TEST_REPORT.md`
 
 ## امنیت

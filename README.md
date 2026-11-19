@@ -2,7 +2,7 @@
 
 پنل ترمینال تحت وب با **ROOT Shell واقعی** برای HANASO — پشت احراز هویت مستقل، قفل Brute-Force و HTTPS — بدون وابستگی عملیاتی به GitHub Actions، SSH از Sandbox یا Cloudflare Tunnel.
 
-از **v1.3.0 (CP13)** علاوه بر توپولوژی‌های ادغام با زیرساخت موجود، یک **نصب مستقل کامل روی Ubuntu تازه** هم پشتیبانی می‌شود: سروری که هیچ nginx/HAProxy/Certbot/گواهی‌ای ندارد، فقط با اجرای دستور نصب به پنل HTTPS دارای Root Web Terminal تبدیل می‌شود (nginx با auth_request، certbot، گواهی Let's Encrypt، وب‌روت ACME و دو Listener واقعی :80/:443 همه توسط خود Installer نصب و راه‌اندازی می‌شوند).
+از **v1.3.0 (CP13)** علاوه بر توپولوژی‌های ادغام با زیرساخت موجود، یک **نصب مستقل کامل روی Ubuntu تازه** هم پشتیبانی می‌شود: سروری که هیچ nginx/HAProxy/Certbot/گواهی‌ای ندارد، فقط با اجرای دستور نصب به پنل HTTPS دارای Root Web Terminal تبدیل می‌شود (nginx با auth_request، certbot، گواهی Let's Encrypt، وب‌روت ACME و دو Listener واقعی :80/:443 همه توسط خود Installer نصب و راه‌اندازی می‌شوند). از **v1.3.1 (CP14)** فاز نصب وابستگی‌ها به یک **موتور کشف و Fallback آینه‌های APT** مجهز است: هر Mirror فقط با موفقیت واقعی APT (واکشی InRelease، به‌روزرسانی ایزوله با اعتبارسنجی امضا توسط apt-secure و بررسی وجود Candidate بسته‌ها) انتخاب می‌شود و در صورت ازکارافتادگی Mirror پیش‌فرض (از جمله از داخل ایران)، به‌صورت خودکار Mirror معتبر بعدی انتخاب و پیکربندی می‌شود.
 
 ## نصب تک‌خطی (VPS — به‌عنوان root)
 
@@ -15,7 +15,7 @@ curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/ma
 - بوت‌استرپ `quick-install.sh` مخزن را می‌گیرد (git یا tarball)، مانیفست `SHA256SUMS` را **fail-closed** راستی‌آزمایی می‌کند و سپس Installer رسمی را اجرا می‌کند؛ بدون root اجرا نمی‌شود (مگر `--sandbox`).
 - **توصیه‌شده برای VPS — پین به نسخه منتشرشده:**
   ```bash
-  curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.3.0/quick-install.sh \
+  curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.3.1/quick-install.sh \
     | bash -s -- --domain ops.hanaso.ir --acme-email admin@hanaso.ir
   ```
 - پین‌کردن شاخه: `... | QUICK_INSTALL_REF=v1.0.0 bash -s -- --domain ops.hanaso.ir` — نکته: CDN خام تا ~۵ دقیقه بعد از Push ممکن است نسخه قبلی شاخه `main` را سرو کند؛ URL تگ‌دار (بالا) این مسئله را ندارد.
@@ -23,7 +23,7 @@ curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/ma
 
 ## معماری — سه توپولوژی
 
-### standalone (جدید در v1.3.0 — سرور تازه، بدون هیچ Reverse Proxy قبلی)
+### standalone (سرور تازه، بدون هیچ Reverse Proxy قبلی — v1.3.0؛ موتور Mirror از v1.3.1)
 
 ```
 مرورگر (Owner)

@@ -191,3 +191,25 @@ HANASO/KOTODAMA ممنوع است) و اجرای nginx به‌عنوان root ب
 
 در standalone چهار سرویس پنل فعال‌اند: `ops-terminal-front` + `ops-terminal-nginx` + `ops-terminal-gateway` + `ops-terminal`؛
 سرویس `nginx` توزیع باید disabled باشد (`systemctl is-enabled nginx` → disabled).
+
+## حادثه «Unable to locate package nginx/certbot» (رفع در v1.3.1)
+
+**علامت:** روی Ubuntu تازه، Installer با این خطا می‌میرد:
+
+```text
+E: Unable to locate package nginx
+E: Unable to locate package certbot
+[install][FATAL] apt-get install failed for: nginx certbot
+```
+
+**ریشه (بازتولید تجربی روی Ubuntu 24.04):** وقتی Mirror پیکربندی‌شده در دسترس نیست (شبکه‌های داخل ایران یکی از موارد رایج است) یا sources خالی است، `apt-get update` فقط `W: Failed to fetch ...` می‌چاپد و **با کد خروج 0** خارج می‌شود («Some index files failed to download … ignored»). سپس `apt-get install` روی فهرست بسته‌های خالی اجرا می‌شود. یعنی کد خروج `apt-get update` هرگز مدرک سلامت Mirror نیست و این پیام به معنای فیلتر بودن nginx هم نیست — فهرست بسته‌ها خالی/کهنه است.
+
+**راه‌حل (v1.3.1):** فاز نصب standalone از موتور Mirror استفاده می‌کند که هر Mirror را فقط با «موفقیت واقعی APT» می‌پذیرد (واکشی InRelease + به‌روزرسانی ایزوله با اعتبارسنجی امضا + وجود Candidate بسته‌ها) و در صورت ازکارافتادگی Mirror پیش‌فرض، خودکار به Mirrorهای رسمی دیگر (سرویس Mirror Discovery، رجیستری Launchpad، فهرست fallback) سوئیچ می‌کند. جزئیات: [`docs/INSTALL.md`](INSTALL.md) — بخش موتور Mirror.
+
+**تشخیص دستی سریع:**
+
+```bash
+apt-get update; echo "rc=$?"          # rc=0 با W: Failed to fetch = فاجعه خاموش
+apt-cache policy nginx certbot        # Candidate: (none) = فهرست خالی/ناقص
+curl -m 10 -o /dev/null -w '%{http_code}\n' http://archive.ubuntu.com/ubuntu/dists/$(lsb_release -cs)/InRelease
+```

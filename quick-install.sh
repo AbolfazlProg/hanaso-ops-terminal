@@ -3,7 +3,7 @@
 # HANASO OPS Web Terminal — one-line remote installer (bootstrap)
 #
 # THE ONE-LINER (on the VPS, as root):
-#   curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.3.0/quick-install.sh \
+#   curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.3.1/quick-install.sh \
 #     | bash -s -- --domain ops.hanaso.ir --acme-email admin@hanaso.ir
 #
 # What this bootstrap does:
@@ -21,10 +21,10 @@
 #   QUICK_INSTALL_SKIP_SHA  set to 1 to skip the SHA256SUMS check (NOT recommended)
 #
 # Pin a release:
-#   curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.3.0/quick-install.sh \
-#     | QUICK_INSTALL_REF=v1.3.0 bash -s -- --domain ops.hanaso.ir --tls-mode acme
+#   curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.3.1/quick-install.sh \
+#     | QUICK_INSTALL_REF=v1.3.1 bash -s -- --domain ops.hanaso.ir --tls-mode acme
 #
-# Standalone fresh Ubuntu (v1.3.0): the installer brings nginx (auth_request
+# Standalone fresh Ubuntu (v1.3.0; APT mirror discovery/fallback since v1.3.1): the installer brings nginx (auth_request
 # proven with nginx -V) + certbot + TLS + the :80/:443 edge itself — no prior
 # reverse proxy, certificate or webroot is required. A DNS A record pointing
 # the domain at THIS server is the only prerequisite (the installer stops
