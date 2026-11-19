@@ -275,8 +275,10 @@ M1) # ---- incident replay: EMPTY sources + EMPTY index -----------------------
   ;;
 
 M2) # ---- primary dead -> second mirror wins ---------------------------------
-  step M2-0 "fresh state"
+  step M2-0 "incident state: current config EMPTY (flat mirror is now healthy and would win by design)"
   reset_apt_fresh
+  : > /etc/apt/sources.list
+  rm -rf /var/lib/apt/lists/*; mkdir -p /var/lib/apt/lists/partial
   assert "M2-0-no-packages" assert_no_panel_packages
   step M2-1 "installer (forced: dead primary + healthy m2)"
   run_install "$LOGDIR/M2-install.log" "$MDEAD $M2"
@@ -289,8 +291,10 @@ M2) # ---- primary dead -> second mirror wins ---------------------------------
   ;;
 
 M3) # ---- incomplete index (no universe) -> rejected ------------------------
-  step M3-0 "fresh state"
+  step M3-0 "incident state: current config EMPTY"
   reset_apt_fresh
+  : > /etc/apt/sources.list
+  rm -rf /var/lib/apt/lists/*; mkdir -p /var/lib/apt/lists/partial
   assert "M3-0-no-packages" assert_no_panel_packages
   step M3-1 "installer (forced: nouniverse mirror first, m1 second)"
   run_install "$LOGDIR/M3-install.log" "$MNU $M1"
@@ -303,8 +307,10 @@ M3) # ---- incomplete index (no universe) -> rejected ------------------------
   ;;
 
 M4) # ---- invalid signature -> rejected --------------------------------------
-  step M4-0 "fresh state"
+  step M4-0 "incident state: current config EMPTY"
   reset_apt_fresh
+  : > /etc/apt/sources.list
+  rm -rf /var/lib/apt/lists/*; mkdir -p /var/lib/apt/lists/partial
   assert "M4-0-no-packages" assert_no_panel_packages
   step M4-1 "installer (forced: TAMPERED InRelease mirror first, m1 second)"
   run_install "$LOGDIR/M4-install.log" "$MBS $M1"
@@ -342,8 +348,10 @@ M5) # ---- current config has universe DISABLED ------------------------------
   ;;
 
 M6) # ---- DNS-broken + TLS-broken mirrors -> exact reasons ------------------
-  step M6-0 "fresh state"
+  step M6-0 "incident state: current config EMPTY"
   reset_apt_fresh
+  : > /etc/apt/sources.list
+  rm -rf /var/lib/apt/lists/*; mkdir -p /var/lib/apt/lists/partial
   assert "M6-0-no-packages" assert_no_panel_packages
   step M6-1 "installer (forced: dns-broken + tls-broken + healthy m1)"
   run_install "$LOGDIR/M6-install.log" "$MDNS $MTLS $M1"
