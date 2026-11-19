@@ -180,9 +180,10 @@ stop_panel() {
 # ============================================================ SCENARIOS ====
 case "$SC" in
 A0) # ---- environment sanity: built-in module, no dynamic-module refs ----
-  step A0-0 "fresh VM state"
+  step A0-0 "fresh VM state + distro nginx from the offline mirror"
   reset_apt_fresh
   stop_panel
+  DEBIAN_FRONTEND=noninteractive apt-get install -y nginx >>"$LOGDIR/A0-install.log" 2>&1 || true
   step A0-1 "distro nginx binary identity"
   assert "A0-1-nginx-binary" test -x /usr/sbin/nginx
   assert "A0-1-version-class" bash -c '/usr/sbin/nginx -v 2>&1 | grep -q "nginx/1.24.0 (Ubuntu)"'
