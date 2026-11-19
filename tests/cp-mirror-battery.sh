@@ -140,15 +140,20 @@ acme_args() {
 
 acme_env() { echo "OPS_STUB_HTTP80=80 OPS_STUB_CA_DIR=/root/cp13-ca OPS_STUB_LIVE_BASE=/etc/letsencrypt"; }
 
-# runs the installer WITH mirror-engine overrides
+# runs the installer WITH mirror-engine overrides (env(1): assignments must be
+# real argv words — "$(cmd)" output is NOT re-parsed as assignments)
 run_install() { # <logfile> <forced-mirrors|""> [extra args...]
   local out="$1" forced="$2"; shift 2
   if [ -n "$forced" ]; then
-    OPS_APT_FORCE_MIRRORS="$forced" $(acme_env) bash "$REPO/scripts/install.sh" --yes \
+    env OPS_APT_FORCE_MIRRORS="$forced" OPS_STUB_HTTP80=80 OPS_STUB_CA_DIR=/root/cp13-ca \
+      OPS_STUB_LIVE_BASE=/etc/letsencrypt \
+      bash "$REPO/scripts/install.sh" --yes \
       --domain "$DOMAIN" --server-ip 127.0.0.1 --tls-mode acme \
       --simulate-acme --certbot-bin "$REPO/tests/stub-certbot.sh" "$@" >"$out" 2>&1
   else
-    $(acme_env) bash "$REPO/scripts/install.sh" --yes \
+    env OPS_STUB_HTTP80=80 OPS_STUB_CA_DIR=/root/cp13-ca \
+      OPS_STUB_LIVE_BASE=/etc/letsencrypt \
+      bash "$REPO/scripts/install.sh" --yes \
       --domain "$DOMAIN" --server-ip 127.0.0.1 --tls-mode acme \
       --simulate-acme --certbot-bin "$REPO/tests/stub-certbot.sh" "$@" >"$out" 2>&1
   fi
