@@ -334,7 +334,7 @@ apt_mirror_rollback_sources() {
 _apt_apply_selected() { # <uri> <suite> <comps> -> 0 on success
   local uri="$1" suite="$2" comps="$3"
   local bd="${BACKUP_DIR:-}/apt-backup"
-  mkdir -p "$bd/sources.list.d"
+  mkdir -p "$bd/sources.list.d" /etc/apt/sources.list.d
 
   # ---- backup EVERYTHING we may touch (mission requirement) ----
   [ -f /etc/apt/sources.list ] && cp -a /etc/apt/sources.list "$bd/sources.list"
