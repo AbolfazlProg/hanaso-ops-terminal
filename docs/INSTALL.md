@@ -29,13 +29,50 @@ curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/ma
 **پین‌کردن به نسخه منتشرشده (توصیه‌شده برای VPS)** — به‌جای شاخه `main`، خود URL خام را به Tag پین کنید:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.2.3/quick-install.sh \
+curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.3.0/quick-install.sh \
   | bash -s -- --domain ops.hanaso.ir --acme-email admin@hanaso.ir
 ```
 
 > نکته: CDN خام (`raw.githubusercontent.com`) تا ~۵ دقیقه بعد از یک Push جدید ممکن است نسخه قبلیِ شاخه `main` را سرو کند؛ URL تگ‌دار همیشه پایدار و تغییرناپذیر است.
 
 > **نکته امنیتی:** `curl | bash` به GitHub و TLS اعتماد می‌کند. برای نصب کاملاً پین‌شده و قابل‌بازبینی، مخزن را Clone کنید، `SHA256SUMS` را خودتان چک کنید و `scripts/install.sh` را مستقیم اجرا کنید (ادامه همین سند).
+
+## نصب مستقل روی Ubuntu تازه (standalone — جدید در v1.3.0)
+
+سرور مقصد فقط باید این‌ها را داشته باشد: Ubuntu 22.04/24.04، دسترسی root، systemd فعال و DNS که
+`ops.hanaso.ir` به **همان سرور** اشاره می‌کند (A record — DNS Only). **هیچ‌کدام از این‌ها پیش‌نیاز نیست:**
+nginx، ماژول auth_request، Certbot، Listener مناسب HTTPS، گواهی TLS موجود، وب‌روت موجود، tmux، curl.
+
+دستور نصب (روی VPS، به‌عنوان root):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.3.0/quick-install.sh \
+  | QUICK_INSTALL_REF=v1.3.0 bash -s -- --domain ops.hanaso.ir --yes
+```
+
+Installer در توپولوژی standalone این ۱۳ گام را خودش انجام می‌دهد:
+
+1. **Preflight** — نسخه/معماری Ubuntu، آزاد بودن :80/:443/:7680/:7681/:7682، apt، systemd، python3 — و **دروازه DNS**:
+   اگر دامنه به این سرور اشاره نکند، Installer **قبل از هر تغییری** متوقف می‌شود (بدون هیچ اثر جانبی).
+2. **نصب وابستگی‌ها با apt** — بسته توزیع `nginx` (ماژول auth_request با `nginx -V` به‌صورت fail-closed اثبات می‌شود) و `certbot`؛ اگر یک باینری nginx «خارجی» بدون auth_request موجود باشد، فقط در صورت غیرفعال/تعلق‌نداشتن به dpkg کنار گذاشته می‌شود (Backup در `/var/backups/ops-terminal/`) وگرنه Installer می‌ایستد.
+3. سرویس `nginx.service` توزیع **disable** می‌شود — مالک انحصاری لبه، unit اختصاصی خود پنل است.
+4. دایرکتوری‌ها و مجوزها — `/opt/ops-terminal`، `/etc/ops-terminal`، `/var/{lib,log,tmp}/ops-terminal`، `/run/ops-terminal`، کاربر سیستم `ops-gw` (بدون shell)، وب‌روت `/var/www/ops-terminal`.
+5. **Auth Gateway** — `ops-terminal-gateway.service` (کاربر ops-gw، hardening کامل).
+6. **ttyd** — `ops-terminal.service` (root shell واقعی، فقط 127.0.0.1:7681، tmux «ops»).
+7. **Systemd Units** — چهار unit (gateway/ttyd/nginx-داخلی/front) با سیاست Restart محدود (CP11: بعد از ۵ خطا در ۱۲۰ ثانیه unit می‌ایستد — حلقه Restart بی‌پایان غیرممکن است).
+8. **nginx + WebSocket** — `ops-terminal-front.service` روی :80/:443 با `CAP_NET_BIND_SERVICE` (بدون root) و nginx داخلی روی 127.0.0.1:7680؛ upgrade طولانی‌مدت WS (timeout هفت‌روزه).
+9. **صدور گواهی** — `certbot certonly --webroot -w /var/www/ops-terminal` از طریق Listener واقعی :80 خود پنل (فاز A) و سپس افزودن vhost :443 با یک reload اعتبارسنجی‌شده (فاز B).
+10. **HTTPS فعال** — HSTS یک‌ساله، TLSv1.2/1.3، ریدایرکت 301 همه‌چیز به HTTPS.
+11. **Renewal** — `certbot.timer` توزیع + هوک deploy که فقط `ops-terminal-front` را reload می‌کند.
+12. **فعال‌سازی سرویس‌ها** — `systemctl enable --now` هر چهار unit (بقا بعد از reboot از طریق symlinkهای wants).
+13. **Health Checks** — دروازه سلامت loopback، :80 → 301، :443 → 200 و در پایان **e2e کامل**: ورود واقعی → WebSocket → shell → خروجی `id -u` = 0.
+
+حالت‌های جایگزین گواهی: `--tls-mode self-signed` (فقط محیط بسته/آزمایش — برای پنل عمومی استفاده نشود؛ با تایمر
+`ops-terminal-tls-renew.timer` خودکار تمدید می‌شود) یا `--tls-cert/--tls-key` (جفت موجود).
+
+Uninstall: `bash /root/hanaso-ops-terminal/scripts/uninstall.sh --yes` — فقط منابع متعلق به این پروژه را حذف می‌کند
+(services/units/wants/فایل‌ها/وب‌روت/هوک LE/گواهی LE این دامنه/کاربر ops-gw). بسته‌های توزیع پیش‌فرض باقی می‌مانند؛
+حذف آن‌ها اختیاری است: `--purge-packages`.
 
 ## معماری
 

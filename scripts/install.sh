@@ -17,6 +17,14 @@
 #   * haproxy-tcp-passthrough : HAProxy forwards raw TCP on :443. The same
 #                        managed SNI ACL routes by req.ssl_sni and the loopback
 #                        nginx terminates TLS itself.
+#   * standalone (CP13, v1.3.0): FRESH UBUNTU SERVER — nothing owns :80/:443.
+#                        The installer apt-installs nginx (auth_request proven
+#                        with nginx -V, fail-closed) + certbot, creates the
+#                        ACME webroot, issues TLS (Let's Encrypt webroot or
+#                        explicit self-signed) and runs its OWN dedicated edge
+#                        nginx (ops-terminal-front) on :80/:443 as ops-gw with
+#                        CAP_NET_BIND_SERVICE. The distro nginx.service is
+#                        disabled; no shared reverse proxy exists to touch.
 #
 #   In EVERY topology: the shared services of HANASO/KOTODAMA are never
 #   restarted — only validated RELOADs; every edit is wrapped in BEGIN/END
@@ -55,6 +63,7 @@ HTTP_PORT=80;  HTTPS_PORT=443
 HTTP_PORT_SET=0; HTTPS_PORT_SET=0
 TTYD_PORT=7681; GATEWAY_PORT=7682; PANEL_PORT=7680; SESSION_TTL=8
 TLS_CERT=""; TLS_KEY=""; ACME_EMAIL=""
+TOPOLOGY_ARG=""; SERVER_IP_ARG=""; TLS_MODE="acme"   # CP13 standalone options
 NGINX_BIN=""; MIME_TYPES=""; TMUX_BIN=""; TMUX_LD_PATH=""
 PY_BIN="$(command -v python3 || echo /usr/bin/python3)"
 HAPROXY_CFG_ARG=""; HAPROXY_BIN_ARG=""; HAPROXY_PIDFILE_ARG=""; CERTBOT_BIN_ARG=""
@@ -77,6 +86,9 @@ while [ $# -gt 0 ]; do
     --tls-cert) TLS_CERT="$2"; shift 2 ;;
     --tls-key) TLS_KEY="$2"; shift 2 ;;
     --acme-email) ACME_EMAIL="$2"; shift 2 ;;
+    --topology) TOPOLOGY_ARG="$2"; shift 2 ;;
+    --server-ip) SERVER_IP_ARG="$2"; shift 2 ;;
+    --tls-mode) TLS_MODE="$2"; shift 2 ;;
     --nginx-bin) NGINX_BIN="$2"; shift 2 ;;
     --mime-types) MIME_TYPES="$2"; shift 2 ;;
     --tmux-bin) TMUX_BIN="$2"; shift 2 ;;
@@ -93,14 +105,36 @@ while [ $# -gt 0 ]; do
 done
 [ "$SANDBOX_TOPOLOGY" = "nginx" ] || [ "$SANDBOX_TOPOLOGY" = "haproxy" ] \
   || die "--sandbox-topology must be nginx or haproxy"
+case "$TLS_MODE" in
+  acme|self-signed) ;;
+  *) die "--tls-mode must be acme or self-signed (got: $TLS_MODE)" ;;
+esac
+case "$TOPOLOGY_ARG" in
+  ""|nginx-direct|haproxy-front|haproxy-tcp-passthrough|standalone) ;;
+  *) die "--topology must be nginx-direct|haproxy-front|haproxy-tcp-passthrough|standalone (got: $TOPOLOGY_ARG)" ;;
+esac
+if [ "$SANDBOX" = "1" ] && [ -n "$TOPOLOGY_ARG" ]; then
+  die "--topology is a production-mode argument (sandbox mode uses --sandbox-topology)"
+fi
 if [ "$SIMULATE_ACME" = "1" ]; then
   # CP10 battery: run the PRODUCTION certbot issuance branch inside the
   # sandbox with a stub certbot (tests/stub-certbot.sh). The production code
   # path below is unchanged; only the entry conditions differ.
-  [ "$SANDBOX" = "1" ] || die "--simulate-acme is sandbox-only (production uses real certbot)"
-  [ "$SANDBOX_TOPOLOGY" = "haproxy" ] || die "--simulate-acme requires --sandbox-topology haproxy"
-  [ -z "$TLS_CERT" ] || die "--simulate-acme conflicts with --tls-cert/--tls-key"
+  # CP13: --simulate-acme is ALSO accepted for the standalone topology so the
+  # clean-VM battery can drive the REAL production ACME branch (route on :80,
+  # certbot invocation, LE paths, deploy hook) with a stub certbot + stub LE
+  # base. It is ALWAYS a test escape hatch and never used on a real VPS.
   [ -n "$CERTBOT_BIN_ARG" ] || die "--simulate-acme requires --certbot-bin (stub certbot)"
+  [ -z "$TLS_CERT" ] || die "--simulate-acme conflicts with --tls-cert/--tls-key"
+  if [ "$SANDBOX" = "1" ]; then
+    [ "$SANDBOX_TOPOLOGY" = "haproxy" ] || die "--simulate-acme sandbox mode requires --sandbox-topology haproxy"
+  else
+    # production mode: the REAL topology is known only after preflight — the
+    # standalone assertion is re-checked there (auto-detect must be allowed)
+    [ -z "$TOPOLOGY_ARG" ] || [ "$TOPOLOGY_ARG" = "standalone" ] \
+      || die "--simulate-acme production mode is standalone-only (CP13 clean-VM battery)"
+    note "SIMULATED ACME (stub certbot) — TEST HARNESS ONLY, never for a real VPS"
+  fi
 fi
 if [ "$SANDBOX" = "1" ] && [ "$SANDBOX_TOPOLOGY" = "haproxy" ]; then
   # default to the production edge ports; an unprivileged sandbox harness
@@ -161,6 +195,14 @@ fi
 INGX_CONF_DIR="$ETC_DIR/nginx"                 # independent loopback nginx (haproxy topologies)
 INGX_VAR_DIR="$VARLIB_DIR/nginx"               # its pid/temp
 INGX_TLS_DIR="$INGX_CONF_DIR/tls"              # passthrough topology cert copy
+# CP13 standalone topology paths (production layout; sandbox derives from SB_ROOT)
+FRONT_CONF_DIR="$ETC_DIR/nginx-front"          # dedicated public-edge nginx (own instance)
+FRONT_VAR_DIR="$VARLIB_DIR/nginx-front"       # its pid/temp
+TLS_DIR="$ETC_DIR/tls"                         # self-signed TLS mode material
+if [ "$SANDBOX" = "1" ]; then WEBROOT_DIR="$SB_ROOT/var/www/ops-terminal"; else WEBROOT_DIR="/var/www/ops-terminal"; fi
+# NOTE: ACME_WEBROOT is set by the topology branches ABOVE (sandbox-haproxy:
+# $SB_ROOT/var/www/html; standalone: set later to the panel webroot). No
+# re-init here — an empty ACME_WEBROOT renders "root ;" and nginx -t dies.
 
 # ------------------------------------------------------------- rollback state --
 # CHANGES_BEGUN: set right before the FIRST mutating action (backup snapshot).
@@ -173,6 +215,9 @@ CREATED_USER=0; NGINX_TOUCHED=0; NGINX_RELOADED=0; SERVICES_STARTED=0
 HAP_TOUCHED=0; HAP_RELOADED=0; HAP_BIND_EDITED=0; HAP_PEM_CREATED=0
 HAP_CRTLIST_CREATED=0; CRT_STYLE=""; CRT_PATH_BIND=""; HAP_RELOAD_MODE="pidfile"
 CREATED_PATHS=()
+# CP13 standalone state
+NGX_PKGS_INSTALLED=""; DIST_NGINX_DISABLED=0; FRONT_STARTED=0
+TLS_HOOK_CREATED=0; SELF_TLS_CREATED=0; NGX_BIN_PROD=""
 
 haproxy_revert_edits() {
   # Surgical removal of OUR changes only; then validate + reload.
@@ -310,6 +355,10 @@ rollback() {
   fi
   if [ "$CREATED_USER" = "1" ]; then userdel ops-gw 2>/dev/null; fi
   for p in "${CREATED_PATHS[@]:-}"; do [ -n "$p" ] && rm -rf "$p"; done
+  if [ "$TOPOLOGY" = "standalone" ] && [ -n "$NGX_PKGS_INSTALLED" ]; then
+    printf '[install][ROLLBACK] NOTE: distro packages stay installed (harmless on a dedicated server): %s\n' "$NGX_PKGS_INSTALLED" >&2
+    printf '[install][ROLLBACK]       remove them with: apt-get purge %s\n' "$NGX_PKGS_INSTALLED" >&2
+  fi
   printf '[install][ROLLBACK] done. backups kept in %s\n' "$BACKUP_DIR" >&2
 }
 on_error() {
@@ -319,6 +368,194 @@ on_error() {
   exit 1
 }
 trap 'on_error $LINENO' ERR
+
+# ---------------------------------------------------- standalone helpers (CP13) --
+# CP13 v1.3.0: fresh-Ubuntu standalone topology — the installer brings its own
+# nginx (with auth_request), certbot, ACME webroot, TLS and the public edge.
+
+standalone_dns_gate() {
+  # Mission requirement: BEFORE any certificate is issued (and before ANY
+  # mutation), the domain must resolve to THIS server. --server-ip may add the
+  # expected public IP explicitly (NAT setups). Mismatch -> hard stop, no
+  # changes made.
+  local dns_ips="${PREFLIGHT_DNS_IPS:-}" srv_ips="${PREFLIGHT_HOST_IPS:-} ${SERVER_IP_ARG:-}" match=0 d s
+  srv_ips="$(printf '%s ' $srv_ips | sed 's/  */ /g')"
+  if [ -z "$(printf '%s' "$dns_ips" | tr -d ' ')" ]; then
+    die "DNS GATE: $DOMAIN does not resolve at all — create the A record (DNS Only) pointing at this server (${srv_ips:-?}) first. NO changes were made."
+  fi
+  for d in $dns_ips; do
+    for s in $srv_ips; do [ "$d" = "$s" ] && match=1; done
+  done
+  if [ "$match" != "1" ]; then
+    die "DNS GATE: $DOMAIN resolves to [${dns_ips}] but this server is [${srv_ips:-unknown}] — fix the A record (DNS Only) to point at THIS host, then re-run. NO changes were made."
+  fi
+  note "DNS gate passed: $DOMAIN -> ${dns_ips} matches this host"
+}
+
+standalone_install_dependencies() {
+  local want=() ngx_present="${PREFLIGHT_NGINX_PRESENT:-0}" ngx_auth="${PREFLIGHT_NGINX_AUTH_REQUEST:-0}"
+  # --- nginx: install when missing OR when the existing binary lacks auth_request
+  if [ "$ngx_present" != "1" ] || [ "$ngx_auth" != "1" ]; then
+    if [ -x /usr/sbin/nginx ]; then
+      if pgrep -x nginx >/dev/null 2>&1; then
+        die "standalone: an nginx process is running but its binary lacks auth_request — stop it or install the distro 'nginx' package, then re-run"
+      fi
+      if dpkg-query -S /usr/sbin/nginx >/dev/null 2>&1; then
+        note "nginx binary without auth_request is dpkg-owned — apt will replace it with the distro 'nginx' package"
+      else
+        local fb="$BACKUP_DIR/nginx-foreign"
+        mkdir -p "$fb"
+        cp -a /usr/sbin/nginx "$fb/nginx.pre-nginx-core"
+        mv /usr/sbin/nginx "$fb/nginx.unused.$TS"
+        note "foreign nginx (no auth_request, not dpkg-owned, not running) moved aside; backup: $fb"
+      fi
+    fi
+    want+=(nginx)
+  fi
+  # --- certbot: needed for the ACME flow (self-signed mode does not need it)
+  if [ "$TLS_MODE" = "acme" ] && ! command -v certbot >/dev/null 2>&1; then
+    want+=(certbot)
+  fi
+  if [ "${#want[@]}" -gt 0 ]; then
+    note "apt: installing ${want[*]} (standalone dependencies) ..."
+    apt-get update -qq 2>/dev/null || apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "${want[@]}" \
+      || die "apt-get install failed for: ${want[*]}"
+    NGX_PKGS_INSTALLED="${want[*]}"
+    printf '%s\n' "${want[@]}" > "$BACKUP_DIR/apt-installed.txt"
+  else
+    note "standalone: nginx (with auth_request) and certbot already present — no packages to install"
+  fi
+  # --- the distro nginx.service must not own the edge; the panel's dedicated
+  #     ops-terminal-front unit owns :80/:443 exclusively on this fresh box.
+  if systemctl list-unit-files nginx.service 2>/dev/null | grep -q nginx.service; then
+    if systemctl is-active --quiet nginx.service 2>/dev/null; then
+      systemctl stop nginx.service
+      note "distro nginx.service stopped (fresh server: nothing else serves the edge)"
+    fi
+    systemctl disable nginx.service 2>/dev/null \
+      && note "distro nginx.service disabled — the panel unit ops-terminal-front.service owns :80/:443" || true
+    DIST_NGINX_DISABLED=1
+  fi
+  # --- HARD verification: the binary MUST have auth_request (fail-closed)
+  NGX_BIN_PROD="$(command -v nginx || echo /usr/sbin/nginx)"
+  [ -x "$NGX_BIN_PROD" ] || die "standalone: nginx binary not found after dependency install"
+  "$NGX_BIN_PROD" -V 2>&1 | tr ' ' '\n' | grep -q -- --with-http_auth_request_module \
+    || die "standalone: installed nginx STILL lacks http_auth_request_module ($NGX_BIN_PROD) — refusing to continue (fail-closed)"
+  # D24: record the REAL binary identity in the install log
+  note "nginx binary identity: $($NGX_BIN_PROD -V 2>&1 | head -1) [$($NGX_BIN_PROD -V 2>&1 | tail -1 | grep -oE 'error-log-path=[^ ]+' || echo 'error-log-path=(default)')]"
+  if [ "$TLS_MODE" = "acme" ]; then
+    CERTBOT_BIN="${CERTBOT_BIN:-$(command -v certbot || echo /usr/bin/certbot)}"
+    [ -x "$CERTBOT_BIN" ] || die "standalone: certbot not available after dependency install (TLS mode acme)"
+    note "certbot identity: $CERTBOT_BIN ($(certbot --version 2>&1 | head -1))"
+  fi
+}
+
+render_front_nginx() {
+  # $1 = "empty" (phase A: ACME issuance; https include is a placeholder) or
+  #      "full" (phase B: the :443 TLS vhost is rendered with real cert paths)
+  local mode="$1" v6_http="" v6_https=""
+  if [ "$SANDBOX" != "1" ]; then v6_http="listen [::]:$HTTP_PORT;"; v6_https="listen [::]:$HTTPS_PORT ssl;"; fi
+  sed -e "s|{{OPS_DOMAIN}}|$DOMAIN|g" \
+      -e "s|{{LISTEN_HTTP}}|$HTTP_PORT|g" -e "s|{{LISTEN_HTTP_V6}}|$v6_http|g" \
+      -e "s|{{ACME_WEBROOT}}|$WEBROOT_DIR|g" \
+      -e "s|{{NGINX_LOG_PREFIX}}|$VARLOG_DIR/nginx-front.|g" \
+      "$REPO_DIR/nginx/ops-terminal-front.conf.template" > "$FRONT_CONF_DIR/ops-terminal-front.conf"
+  if [ "$mode" = "full" ]; then
+    sed -e "s|{{OPS_DOMAIN}}|$DOMAIN|g" \
+        -e "s|{{LISTEN_HTTPS}}|$HTTPS_PORT|g" -e "s|{{LISTEN_HTTPS_V6}}|$v6_https|g" \
+        -e "s|{{TLS_CERT}}|$TLS_CERT|g" -e "s|{{TLS_KEY}}|$TLS_KEY|g" \
+        -e "s|{{PANEL_PORT}}|$PANEL_PORT|g" \
+        -e "s|{{NGINX_LOG_PREFIX}}|$VARLOG_DIR/nginx-front.|g" \
+        "$REPO_DIR/nginx/ops-terminal-https.conf.template" > "$FRONT_CONF_DIR/ops-terminal-https.conf"
+  else
+    printf '# CP13 phase A (ACME issuance): the :443 TLS vhost is rendered here\n# in phase B, right after the certificate exists.\n' > "$FRONT_CONF_DIR/ops-terminal-https.conf"
+  fi
+  cat > "$FRONT_CONF_DIR/nginx.conf" <<EOF
+# HANASO OPS Web Terminal — public edge nginx master config (standalone)
+# Managed file — do not edit manually. Remove via scripts/uninstall.sh
+# daemon off keeps the master in the FOREGROUND for systemd's Type=simple (CP11).
+daemon off;
+worker_processes 1;
+error_log $VARLOG_DIR/nginx-front-master-error.log warn;
+pid $FRONT_VAR_DIR/nginx.pid;
+events { worker_connections 512; }
+http {
+    include $MIME_TYPES;
+    default_type application/octet-stream;
+    access_log off;
+    client_body_temp_path $FRONT_VAR_DIR/tmp/client_body;
+    proxy_temp_path      $FRONT_VAR_DIR/tmp/proxy;
+    fastcgi_temp_path    $FRONT_VAR_DIR/tmp/fastcgi;
+    uwsgi_temp_path      $FRONT_VAR_DIR/tmp/uwsgi;
+    scgi_temp_path       $FRONT_VAR_DIR/tmp/scgi;
+    sendfile on;
+    keepalive_timeout 65;
+    include $FRONT_CONF_DIR/ops-terminal-front.conf;
+}
+EOF
+}
+
+generate_self_signed_tls() {
+  # Explicit self-signed TLS mode (CP13): for the clean-VM battery and for
+  # closed/internal deployments. A public production panel MUST use the default
+  # acme mode (real Let's Encrypt certificates). The material is root-owned,
+  # group-readable by ops-gw only, and auto-renewed by the
+  # ops-terminal-tls-renew.timer unit (regenerate < 30 days to expiry).
+  mkdir -p "$TLS_DIR"
+  openssl req -x509 -newkey rsa:2048 -nodes -days 90 -sha256 \
+    -keyout "$TLS_DIR/privkey.pem" -out "$TLS_DIR/fullchain.pem" \
+    -subj "/CN=$DOMAIN" -addext "subjectAltName=DNS:$DOMAIN" 2>/dev/null \
+    || return 1
+  chown root:ops-gw "$TLS_DIR/privkey.pem" "$TLS_DIR/fullchain.pem"
+  chmod 0640 "$TLS_DIR/privkey.pem"
+  chmod 0644 "$TLS_DIR/fullchain.pem"
+  SELF_TLS_CREATED=1
+  TLS_CERT="$TLS_DIR/fullchain.pem"
+  TLS_KEY="$TLS_DIR/privkey.pem"
+  validate_cert_pair "$TLS_CERT" "$TLS_KEY" "$DOMAIN" || return 1
+  return 0
+}
+
+issue_standalone_certificate() {
+  # Production ACME issuance (standalone): HTTP-01 via the panel's OWN :80
+  # listener (phase A front nginx) serving the webroot. Fail-closed.
+  [ -n "$CERTBOT_BIN" ] || return 1
+  mkdir -p "$WEBROOT_DIR/.well-known/acme-challenge"
+  local acme_flags="--register-unsafely-without-email"
+  [ -n "$ACME_EMAIL" ] && acme_flags="--email $ACME_EMAIL --no-eff-email"
+  note "certbot: issuing Let's Encrypt certificate for $DOMAIN (webroot $WEBROOT_DIR) ..."
+  if ! "$CERTBOT_BIN" certonly --webroot -w "$WEBROOT_DIR" -d "$DOMAIN" \
+       --non-interactive --agree-tos $acme_flags --keep-until-expiring; then
+    note "certbot issuance FAILED for $DOMAIN"
+    return 1
+  fi
+  TLS_CERT="$LE_LIVE_BASE/live/$DOMAIN/fullchain.pem"
+  TLS_KEY="$LE_LIVE_BASE/live/$DOMAIN/privkey.pem"
+  validate_cert_pair "$TLS_CERT" "$TLS_KEY" "$DOMAIN" || {
+    note "issued certificate FAILED validation — treating issuance as failed (fail-closed)"
+    TLS_CERT=""; TLS_KEY=""
+    return 1
+  }
+  # renewal deploy hook: reload ONLY the panel front unit (never the distro nginx)
+  if [ "$SANDBOX" != "1" ]; then
+    DEPLOY_HOOK="$LE_LIVE_BASE/renewal-hooks/deploy/ops-terminal-standalone.sh"
+    mkdir -p "$(dirname "$DEPLOY_HOOK")"
+    cat > "$DEPLOY_HOOK" <<EOF
+#!/bin/sh
+# Managed by hanaso-ops-terminal — reloads the panel's own edge nginx on renewal.
+$NGX_BIN_PROD -c $FRONT_CONF_DIR/nginx.conf -t 2>/dev/null && systemctl reload ops-terminal-front.service
+EOF
+    chmod 0755 "$DEPLOY_HOOK"
+    TLS_HOOK_CREATED=1
+    note "renewal deploy hook written: $DEPLOY_HOOK (reloads ops-terminal-front only)"
+  fi
+  # the distro certbot renewal timer (apt ships it) must be enabled
+  systemctl enable certbot.timer 2>/dev/null \
+    && note "certbot.timer enabled (Let's Encrypt renewals)" \
+    || note "WARNING: certbot.timer could not be enabled — verify renewal manually (certbot renew --dry-run)"
+  return 0
+}
 
 # ------------------------------------------------------------ preflight --
 TOPOLOGY_SET=""
@@ -359,12 +596,37 @@ else
   # STRICT parse — the env file is NEVER sourced as a shell script
   ops_env_read /tmp/ops-preflight.env || die "preflight env file failed strict validation"
   [ "${PREFLIGHT_IS_ROOT:-0}" = "1" ]        || die "preflight: not root"
-  [ "${PREFLIGHT_NGINX_AUTH_REQUEST:-0}" = "1" ] || die "preflight: nginx lacks auth_request module"
   [ "${PREFLIGHT_PYTHON_OK:-0}" = "1" ]      || die "preflight: python3 unsuitable"
   [ "${PREFLIGHT_PORT_7680_FREE:-1}" = "1" ] && [ "${PREFLIGHT_PORT_7681_FREE:-1}" = "1" ] \
     && [ "${PREFLIGHT_PORT_7682_FREE:-1}" = "1" ] \
     || { [ "${PREFLIGHT_EXISTING_INSTALL:-0}" = "1" ] || die "preflight: ports 7680/7681/7682 busy (not by this panel)"; }
   TOPOLOGY="${PREFLIGHT_TOPOLOGY:-unknown}"
+  if [ -n "$TOPOLOGY_ARG" ]; then
+    [ "$TOPOLOGY" = "$TOPOLOGY_ARG" ] \
+      || note "topology override: preflight detected '$TOPOLOGY', operator forced '$TOPOLOGY_ARG'"
+    TOPOLOGY="$TOPOLOGY_ARG"
+  fi
+  if [ "$TOPOLOGY" = "standalone" ]; then
+    # CP13 fresh-Ubuntu standalone gates: the installer brings everything, so
+    # a MISSING nginx/certbot is EXPECTED — but the edge ports must be free,
+    # systemd must be real and apt must be usable. An EXISTING standalone
+    # install (idempotent reinstall) legitimately owns :80/:443 itself.
+    EXISTING_STANDALONE=0
+    [ "$(sed -n 's/^OPS_TOPOLOGY=//p' /etc/ops-terminal/env 2>/dev/null | head -n1)" = "standalone" ] && EXISTING_STANDALONE=1
+    [ "$SIMULATE_ACME" != "1" ] || [ "$SANDBOX" = "1" ] || note "SIMULATED ACME (stub certbot) — TEST HARNESS ONLY, never for a real VPS"
+    [ "${PREFLIGHT_SYSTEMD:-0}" = "1" ]     || die "standalone: systemd is not running — this topology installs systemd units"
+    if [ "$EXISTING_STANDALONE" != "1" ]; then
+      [ "${PREFLIGHT_PORT_80_FREE:-1}" = "1" ]  || die "standalone: port 80 busy — the panel's dedicated front nginx must own the edge"
+      [ "${PREFLIGHT_PORT_443_FREE:-1}" = "1" ] || die "standalone: port 443 busy — the panel's dedicated front nginx must own the edge"
+    else
+      note "idempotent reinstall: the existing front nginx keeps the edge (validated reload)"
+    fi
+    [ "${PREFLIGHT_APT_OK:-0}" = "1" ]       || die "standalone: apt-get unavailable — cannot install nginx/certbot (install them manually, then use the nginx-direct topology)"
+    [ "$(uname -m)" = "x86_64" ] || die "standalone: vendored ttyd is x86_64-only (host: $(uname -m))"
+    standalone_dns_gate
+  else
+    [ "${PREFLIGHT_NGINX_AUTH_REQUEST:-0}" = "1" ] || die "preflight: nginx lacks auth_request module"
+  fi
   VHOST_DIR="${PREFLIGHT_NGINX_VHOST_DIR:-}"
   ENABLE_DIR="${PREFLIGHT_NGINX_ENABLE_DIR:-}"
   EXISTING_CERT="${PREFLIGHT_CERT_PATH:-}"
@@ -394,6 +656,10 @@ else
     # baseline: the CURRENT shared config must validate before we touch anything
     ha_haproxy_check "$HAPROXY_BIN" "$HAPROXY_CFG" \
       || die "baseline haproxy -c FAILED on $HAPROXY_CFG — the config is already broken; refusing to touch it (no changes made)"
+  elif [ "$TOPOLOGY" = "standalone" ]; then
+    # CP13: fresh-server topology — the installer brings its own nginx and
+    # owns :80/:443 exclusively; no shared proxy exists to analyze here.
+    note "topology standalone: fresh server — the installer installs nginx + certbot and owns the edge (no shared proxy involved)"
   elif [ "$TOPOLOGY" != "nginx-direct" ]; then
     cat <<'EOM'
 
@@ -411,13 +677,29 @@ if [ "$ASSUME_YES" != "1" ] && [ "$SANDBOX" != "1" ]; then
   printf '\nInstall HANASO OPS Web Terminal for %s?\n' "$DOMAIN"
   printf '  topology: %s\n' "$TOPOLOGY"
   printf '  services : ttyd+gateway+internal nginx on 127.0.0.1 (ports %s/%s/%s)\n' "$TTYD_PORT" "$GATEWAY_PORT" "$PANEL_PORT"
-  if [ "$TOPOLOGY" != "nginx-direct" ]; then
+  if [ "$TOPOLOGY" = "standalone" ]; then
+    printf '  edge     : DEDICATED ops-terminal-front nginx on :%s/: %s (TLS %s for %s)\n' "$HTTP_PORT" "$HTTPS_PORT" "$TLS_MODE" "$DOMAIN"
+    printf '  packages : nginx + certbot installed via apt (fresh server; nothing pre-required)\n'
+  elif [ "$TOPOLOGY" != "nginx-direct" ]; then
     printf '  shared   : %s gets a MANAGED ACL/backend block + VALIDATED reload only (never restart)\n' "$HAPROXY_CFG"
   else
     printf '  shared   : nginx gets a dedicated vhost + reload only (never restart)\n'
   fi
   printf 'Type YES to continue: '
   read -r ANS; [ "$ANS" = "YES" ] || die "aborted by operator"
+fi
+
+# ----------------------------------------------- standalone: dependencies --
+# CP13: on a fresh server the installer installs its own dependencies (nginx
+# with auth_request + certbot for ACME). This happens BEFORE the backup
+# snapshot so a later failure still rolls back every file this panel created;
+# apt-installed DISTRO PACKAGES are intentionally kept (recorded in the
+# backup dir + reported by the rollback) — on a dedicated fresh server they
+# are harmless.
+if [ "$SANDBOX" != "1" ] && [ "$TOPOLOGY" = "standalone" ]; then
+  CHANGES_BEGUN=1
+  mkdir -p "$BACKUP_DIR"
+  standalone_install_dependencies
 fi
 
 # ------------------------------------------------------- optional apt install --
@@ -464,7 +746,19 @@ if [ "$TOPOLOGY" != "nginx-direct" ]; then
          "$INGX_VAR_DIR/tmp/fastcgi" "$INGX_VAR_DIR/tmp/uwsgi" "$INGX_VAR_DIR/tmp/scgi")
   [ "$SANDBOX" != "1" ] && mkdir -p "$ACME_WEBROOT" 2>/dev/null || true
 fi
+if [ "$TOPOLOGY" = "standalone" ]; then
+  DIRS+=("$FRONT_CONF_DIR" "$FRONT_VAR_DIR/tmp/client_body" "$FRONT_VAR_DIR/tmp/proxy" \
+         "$FRONT_VAR_DIR/tmp/fastcgi" "$FRONT_VAR_DIR/tmp/uwsgi" "$FRONT_VAR_DIR/tmp/scgi" \
+         "$TLS_DIR" "$WEBROOT_DIR/.well-known/acme-challenge")
+fi
 [ "$SANDBOX" = "1" ] && [ "$SANDBOX_TOPOLOGY" = "nginx" ] && DIRS+=("$NGX_DIR")
+# CP13 rollback completeness: the DIRS loop registers SUBdirectories; a fresh
+# install must also register the TOP-LEVEL panel dirs so a rollback removes
+# them entirely (a failed standalone install leaves NOTHING behind).
+for t in "$OPT_DIR" "$ETC_DIR" "$VARLIB_DIR" "$VARLOG_DIR" "$VARTMP_DIR" "$RUN_DIR"; do
+  [ -e "$t" ] || CREATED_PATHS+=("$t")
+done
+[ "$TOPOLOGY" = "standalone" ] && [ ! -e "$WEBROOT_DIR" ] && CREATED_PATHS+=("$WEBROOT_DIR")
 for d in "${DIRS[@]}"; do
   if [ ! -d "$d" ]; then mkdir -p "$d"; CREATED_PATHS+=("$d"); fi
 done
@@ -476,6 +770,9 @@ install -m 0755 "$REPO_DIR/gateway/gateway.py" "$OPT_DIR/gateway/gateway.py"
 install -m 0755 "$REPO_DIR/scripts/health-check.sh" "$OPT_DIR/health-check.sh"
 
 # --- environment file
+if [ "$TOPOLOGY" = "standalone" ]; then
+  ACME_WEBROOT="$WEBROOT_DIR"   # served by the panel's own :80 listener (front)
+fi
 cat > "$ETC_DIR/env" <<EOF
 # HANASO OPS Web Terminal — gateway environment (rendered by installer)
 OPS_DOMAIN=$DOMAIN
@@ -592,6 +889,12 @@ if [ "$TOPOLOGY" != "nginx-direct" ]; then
   render_internal_nginx "127.0.0.1:$PANEL_PORT" ""
   note "internal nginx rendered: $INGX_CONF_DIR/nginx.conf (loopback :$PANEL_PORT)"
 fi
+if [ "$TOPOLOGY" = "standalone" ]; then
+  # CP13: the dedicated public edge (phase A — :80 ACME + redirect; the :443
+  # TLS vhost is rendered in phase B once the certificate material exists).
+  render_front_nginx empty
+  note "front nginx rendered (phase A): $FRONT_CONF_DIR/nginx.conf"
+fi
 
 # ------------------------------------------------------------ systemd units --
 if [ "$SANDBOX" != "1" ]; then
@@ -618,6 +921,53 @@ if [ "$SANDBOX" != "1" ]; then
     chown -R root:ops-gw "$INGX_CONF_DIR" 2>/dev/null || true
     chown -R ops-gw:ops-gw "$INGX_VAR_DIR" 2>/dev/null || true
     chmod 0750 "$INGX_CONF_DIR" "$INGX_VAR_DIR"
+  fi
+  if [ "$TOPOLOGY" = "standalone" ]; then
+    # CP13: dedicated public-edge unit — same CP11/CP12 contract as the
+    # internal nginx (pid defined ONLY in nginx.conf; no version-dependent
+    # options; daemon off foreground; bounded restart policy), plus
+    # CAP_NET_BIND_SERVICE so the unprivileged ops-gw identity can bind
+    # :80/:443. No root, no setuid, no ambient access beyond the edge bind.
+    sed -e "s|/usr/sbin/nginx|$NGX_BIN_PROD|" \
+        -e "s|/etc/ops-terminal/nginx-front|$FRONT_CONF_DIR|g" \
+        -e "s|/var/lib/ops-terminal/nginx-front|$FRONT_VAR_DIR|g" \
+        -e "s|/var/log/ops-terminal|$VARLOG_DIR|g" \
+        -e "s|/etc/ops-terminal|$ETC_DIR|g" \
+        -e "s|/var/lib/ops-terminal|$VARLIB_DIR|g" \
+        "$REPO_DIR/systemd/ops-terminal-front.service" > "$SYSTEMD_DIR/ops-terminal-front.service"
+    chown -R root:ops-gw "$FRONT_CONF_DIR" 2>/dev/null || true
+    chown -R ops-gw:ops-gw "$FRONT_VAR_DIR" 2>/dev/null || true
+    chmod 0750 "$FRONT_CONF_DIR" "$FRONT_VAR_DIR"
+    if [ "$TLS_MODE" = "self-signed" ]; then
+      sed -e "s|/opt/ops-terminal|$OPT_DIR|g" \
+          "$REPO_DIR/systemd/ops-terminal-tls-renew.service" > "$SYSTEMD_DIR/ops-terminal-tls-renew.service"
+      cp "$REPO_DIR/systemd/ops-terminal-tls-renew.timer" "$SYSTEMD_DIR/ops-terminal-tls-renew.timer"
+      cat > "$OPT_DIR/tls-renew.sh" <<EOF
+#!/usr/bin/env bash
+# Managed by hanaso-ops-terminal (self-signed TLS mode, CP13).
+# Regenerates the panel certificate when it is within 30 days of expiry and
+# reloads ONLY the panel's own front unit. Never touches the distro nginx.
+set -u
+TLS_DIR="$TLS_DIR"
+CONF="$FRONT_CONF_DIR/nginx.conf"
+UNIT=ops-terminal-front.service
+NGINX="$NGX_BIN_PROD"
+DOMAIN="$DOMAIN"
+if openssl x509 -in "\$TLS_DIR/fullchain.pem" -noout -checkend 2592000 >/dev/null 2>&1; then
+  exit 0   # still valid for more than 30 days - nothing to do
+fi
+openssl req -x509 -newkey rsa:2048 -nodes -days 90 -sha256 \\
+  -keyout "\$TLS_DIR/privkey.pem" -out "\$TLS_DIR/fullchain.pem" \\
+  -subj "/CN=\$DOMAIN" -addext "subjectAltName=DNS:\$DOMAIN" 2>/dev/null || exit 1
+chown root:ops-gw "\$TLS_DIR/privkey.pem" "\$TLS_DIR/fullchain.pem"
+chmod 0640 "\$TLS_DIR/privkey.pem"; chmod 0644 "\$TLS_DIR/fullchain.pem"
+"\$NGINX" -c "\$CONF" -t 2>/dev/null || exit 1
+systemctl reload "\$UNIT" 2>/dev/null || true
+exit 0
+EOF
+      chmod 0755 "$OPT_DIR/tls-renew.sh"
+      note "TLS renewal units rendered: ops-terminal-tls-renew.service + .timer"
+    fi
   fi
   # CP12: record the REAL binary identity in the install log. The CP11
   # incident (`nginx: invalid option: "e"`) was caused by a version-skew
@@ -671,6 +1021,9 @@ if [ "$SANDBOX" = "1" ]; then
     # production form. The EARLY error log (compiled-in default, opened before
     # the config parse) fails for an unprivileged identity with a benign
     # [alert]; all post-parse logging goes to /var/log/ops-terminal only.
+    # CP13: validate BEFORE starting (mirrors the production ExecStartPre)
+    "$NGINX_BIN" -t -c "$INGX_CONF_DIR/nginx.conf" >> "$VARLOG_DIR/nginx-internal.log" 2>&1 \
+      || { echo "  --- internal nginx -t FAILED ---"; tail -6 "$VARLOG_DIR/nginx-internal.log"; die "internal nginx config test failed (see above)"; }
     nohup "$NGINX_BIN" -c "$INGX_CONF_DIR/nginx.conf" \
           >> "$VARLOG_DIR/nginx-internal.log" 2>&1 &
     echo $! > "$RUN_DIR/nginx-internal.pid"
@@ -831,14 +1184,74 @@ EOF
   return 1
 }
 
-if [ "$SANDBOX" = "1" ] && [ "$SIMULATE_ACME" != "1" ]; then
+if [ "$TOPOLOGY" = "standalone" ]; then
+  # ---------------- CP13 standalone TLS: phase A -> acquire -> phase B --------
+  # self-signed mode: the renewal timer unit exists — enable it (persistence)
+  if [ "$TLS_MODE" = "self-signed" ]; then
+    systemctl enable ops-terminal-tls-renew.timer 2>/dev/null \
+      && note "ops-terminal-tls-renew.timer enabled (daily regeneration check)" || true
+  fi
+  # phase A: the front nginx is already rendered (empty https include);
+  # start it so :80 serves the ACME webroot + redirects. NEVER the distro nginx.
+  systemctl enable --now ops-terminal-front.service
+  FRONT_STARTED=1
+  for i in $(seq 1 30); do
+    ss -tln 2>/dev/null | awk '{print $4}' | grep -qE ":$HTTP_PORT$" && break
+    sleep 0.5; [ "$i" = "30" ] && die "front nginx did not open :$HTTP_PORT (journal: ops-terminal-front.service)"
+  done
+  CODE80="$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$HTTP_PORT/" || echo 000)"
+  [ "$CODE80" = "301" ] || [ "$CODE80" = "302" ] \
+    || die "front nginx :$HTTP_PORT did not answer with a redirect (got HTTP $CODE80)"
+  note "front nginx phase A live on :$HTTP_PORT (ACME webroot + https redirect)"
+
+  # TLS material (explicitly provided / self-signed / real ACME issuance)
+  if [ -n "$TLS_CERT" ]; then
+    validate_cert_pair "$TLS_CERT" "$TLS_KEY" "$DOMAIN" \
+      || die "provided certificate failed validation (readable/valid/covers $DOMAIN/matches key)"
+    note "standalone: using provided certificate: $TLS_CERT"
+  elif [ "$TLS_MODE" = "self-signed" ]; then
+    generate_self_signed_tls \
+      || die "self-signed certificate generation/validation failed for $DOMAIN"
+    note "TLS mode self-signed: $TLS_CERT (NOT for a public panel — production uses --tls-mode acme)"
+    note "auto-renewal: ops-terminal-tls-renew.timer (regenerates < 30 days to expiry)"
+  else
+    if ! issue_standalone_certificate; then
+      cat <<'EOM'
+
+[install] TLS GATE — certificate issuance FAILED (standalone topology).
+  This install is rolled back completely: nothing stays installed and nothing
+  is exposed. Fix DNS (the A record must point at THIS host), verify the :80
+  ACME route and certbot, then re-run this installer.
+EOM
+      die "certbot issuance failed for $DOMAIN (fail-closed)"
+    fi
+    note "Let's Encrypt certificate validated: $TLS_CERT"
+  fi
+
+  # phase B: render the :443 TLS vhost with the real cert paths, validate,
+  # then a controlled RELOAD (the :80 listener stays online; nginx can add
+  # new listen sockets on reload).
+  render_front_nginx full
+  "$NGX_BIN_PROD" -t -c "$FRONT_CONF_DIR/nginx.conf"
+  systemctl reload ops-terminal-front.service
+  for i in $(seq 1 30); do
+    ss -tln 2>/dev/null | awk '{print $4}' | grep -qE ":$HTTPS_PORT$" && break
+    sleep 0.5; [ "$i" = "30" ] && die "front nginx did not open :$HTTPS_PORT after reload"
+  done
+  CODE443="$(curl -sk -m 5 -o /dev/null -w '%{http_code}' "https://127.0.0.1:$HTTPS_PORT/login" || echo 000)"
+  [ "$CODE443" = "200" ] \
+    || die "front nginx :$HTTPS_PORT did not serve the login page (got HTTP $CODE443)"
+  note "front nginx phase B live on :$HTTPS_PORT (TLS for $DOMAIN -> internal nginx 127.0.0.1:$PANEL_PORT)"
+fi
+
+if [ "$TOPOLOGY" != "standalone" ] && [ "$SANDBOX" = "1" ] && [ "$SIMULATE_ACME" != "1" ]; then
   [ -n "$TLS_CERT" ] && [ -n "$TLS_KEY" ] \
     || die "--sandbox-topology haproxy requires --tls-cert/--tls-key (test certificate)"
   PANEL_PEM_SRC_CERT="$TLS_CERT"; PANEL_PEM_SRC_KEY="$TLS_KEY"
   validate_cert_pair "$PANEL_PEM_SRC_CERT" "$PANEL_PEM_SRC_KEY" "$DOMAIN" \
     || die "provided test certificate failed validation (readable/valid/covers $DOMAIN/matches key)"
   note "sandbox mode: using provided test certificate"
-else
+elif [ "$TOPOLOGY" != "standalone" ]; then
   # Production selection chain — ALSO runs for --sandbox --simulate-acme
   # (CP10 battery: the same code path the real VPS takes on a clean install
   # where preflight reports PREFLIGHT_CERT_PATH='' / OPS_CERT_EXISTS=0).
@@ -980,7 +1393,7 @@ EOF
   fi
 fi
 
-if [ "$TOPOLOGY" != "nginx-direct" ]; then
+if [ "$TOPOLOGY" = "haproxy-front" ] || [ "$TOPOLOGY" = "haproxy-tcp-passthrough" ]; then
   # ---- shared HAProxy: managed SNI/Host route + (ssl-term) cert integration ----
   SEC443="$(ha_find_bind_section "$HAPROXY_CFG" "$HTTPS_PORT")" || SEC443=""
   [ -n "$SEC443" ] || { die "could not locate a :${HTTPS_PORT} frontend in $HAPROXY_CFG (rollback keeps services loopback-only)"; }
@@ -1152,7 +1565,10 @@ else
   note "running end-to-end verification (login -> websocket -> shell)..."
   E2E_ARGS=(--base "https://$DOMAIN" --connect 127.0.0.1 --port "$HTTPS_PORT"
             --username "$PANEL_USERNAME" --password-stdin)
-  if [ "$SANDBOX" = "1" ]; then
+  if [ "$SANDBOX" = "1" ] || [ "$TLS_MODE" = "self-signed" ]; then
+    # self-signed TLS (CP13 VM battery / closed deployments): the e2e client
+    # skips CA validation — by design for a self-signed certificate. The ACME
+    # production mode keeps strict verification.
     E2E_ARGS+=(--insecure-allow --expect-uid "${E2E_EXPECT_UID:-$(id -u)}")
   else
     E2E_ARGS+=(--expect-uid "${E2E_EXPECT_UID:-0}")
@@ -1178,7 +1594,15 @@ printf ' HANASO OPS Web Terminal — installed\n'
 printf '==========================================================\n'
 printf ' Panel URL   : https://%s%s\n' "$DOMAIN" "$([ "$HTTPS_PORT" != "443" ] && echo ":$HTTPS_PORT")"
 printf ' Topology    : %s\n' "$TOPOLOGY"
-if [ "$TOPOLOGY" != "nginx-direct" ]; then
+if [ "$TOPOLOGY" = "standalone" ]; then
+  printf ' Edge nginx  : ops-terminal-front.service (dedicated; distro nginx.service %s)\n' "$([ "$DIST_NGINX_DISABLED" = "1" ] && echo 'disabled' || echo 'absent')"
+  printf ' TLS         : %s mode — %s\n' "$TLS_MODE" "$TLS_CERT"
+  if [ "$TLS_MODE" = "acme" ]; then
+    printf ' Renewal     : certbot.timer + deploy hook (reloads ops-terminal-front only)\n'
+  else
+    printf ' Renewal     : ops-terminal-tls-renew.timer (regenerates < 30d to expiry)\n'
+  fi
+elif [ "$TOPOLOGY" != "nginx-direct" ]; then
   printf ' HAProxy     : %s (managed blocks + validated reload only)\n' "$HAPROXY_CFG"
   printf ' Panel PEM   : %s\n' "${HAP_PEM:-$INGX_TLS_DIR/fullchain.pem (internal nginx TLS)}"
 fi
@@ -1188,7 +1612,9 @@ if [ -n "${PANEL_PASSWORD:-}" ]; then
   printf ' PASSWORD    : %s\n' "$PANEL_PASSWORD"
   printf '               (shown ONCE — save it now; it is not stored anywhere in cleartext)\n'
 fi
-printf ' Services    : ops-terminal-gateway  ops-terminal%s\n' "$([ "$TOPOLOGY" != "nginx-direct" ] && echo '  ops-terminal-nginx' || echo '')"
+printf ' Services    : ops-terminal-gateway  ops-terminal%s%s\n' \
+  "$([ "$TOPOLOGY" != "nginx-direct" ] && echo '  ops-terminal-nginx' || echo '')" \
+  "$([ "$TOPOLOGY" = "standalone" ] && echo '  ops-terminal-front' || echo '')"
 printf ' Logs        : %s/gateway.log  (login/logout events + IP)\n' "$VARLOG_DIR"
 printf ' Docs        : docs/INSTALL.md  docs/SECURITY.md  docs/ROLLBACK.md\n'
 printf ' Rotate pass : %s\n' "$([ "$SANDBOX" = "1" ] && echo "$PY_BIN $OPT_DIR/gateway/gateway.py passwd --generate --print-once" || echo 'ops-terminal-passwd  (or panel: /change-password)')"

@@ -176,3 +176,18 @@ HANASO/KOTODAMA ممنوع است) و اجرای nginx به‌عنوان root ب
 ## وقتی هیچ‌کارات جواب نداد
 
 `docs/ROLLBACK.md` را اجرا کنید (حذف کامل پنل، بدون دست زدن به سرویس‌های مشترک) و لاگ نصب را نگه دارید: `/var/backups/ops-terminal/`.
+
+
+## توپولوژی standalone (v1.3.0)
+
+| نشانه | علت محتمل | راه‌حل |
+|-------|-----------|--------|
+| `[install][FATAL] DNS GATE: ...` | A record دامنه به این سرور اشاره نمی‌کند (یا هنوز DNS Only نشده) | رکورد A را به IP همین سرور تغییر دهید؛ بعد از انتشار DNS دوباره اجرا کنید — نصبِ متوقف‌شده هیچ اثری باقی نمی‌گذارد |
+| `standalone: port 80 busy` / `port 443 busy` | سرویس دیگری لبه را گرفته | فقط وقتی پنل نصب نیست؛ اگر نصب قبلی خود پنل است، Installer مسیر idempotent reinstall را می‌رود (این خطا یعنی مالکِ لبه سرویس دیگری است) |
+| `nginx STILL lacks http_auth_request_module` | باینری nginx خارجی/دستی بدون ماژول | بسته توزیع `nginx` را نصب کنید؛ اگر باینری دستی است، Installer آن را (در صورت امن بودن) با Backup کنار می‌گذارد یا می‌ایستد |
+| `front nginx did not open :443` | شکست ExecStartPre یا bind | `journalctl -u ops-terminal-front -n 50`؛ unit با `CAP_NET_BIND_SERVICE` به‌عنوان ops-gw اجرا می‌شود — nginx را دستی و با root اجرا نکنید |
+| 502 روی `GET /ws` با مرورگر روی پورت غیراستاندارد | Host بدون پورت به ttyd رسیده (check-origin `-O` پورت را مقایسه می‌کند) | از نسخه ≥ v1.3.0 استفاده کنید (front با `$http_host` پورت را حفظ می‌کند) |
+| گواهی تمدید نشد | `certbot.timer` غیرفعال یا هوک deploy حذف‌شده | `systemctl status certbot.timer`؛ فایل `/etc/letsencrypt/renewal-hooks/deploy/ops-terminal-standalone.sh` باید موجود و executable باشد |
+
+در standalone چهار سرویس پنل فعال‌اند: `ops-terminal-front` + `ops-terminal-nginx` + `ops-terminal-gateway` + `ops-terminal`؛
+سرویس `nginx` توزیع باید disabled باشد (`systemctl is-enabled nginx` → disabled).

@@ -39,6 +39,16 @@ if [ "$SANDBOX" = "0" ] && command -v systemctl >/dev/null 2>&1; then
     if systemctl is-active --quiet ops-terminal-nginx 2>/dev/null; then chk OK "systemd: ops-terminal-nginx active"
     elif systemctl list-unit-files ops-terminal-nginx.service >/dev/null 2>&1; then chk FAIL "systemd: ops-terminal-nginx NOT active"
     else say INFO "ops-terminal-nginx unit not installed"; fi
+  fi
+  if [ "$TOPOLOGY" = "standalone" ]; then
+    # CP13: the panel's OWN edge nginx is a required unit here
+    if systemctl is-active --quiet ops-terminal-front 2>/dev/null; then chk OK "systemd: ops-terminal-front (edge :80/:443) active"
+    elif systemctl list-unit-files ops-terminal-front.service >/dev/null 2>&1; then chk FAIL "systemd: ops-terminal-front NOT active"
+    else say INFO "ops-terminal-front unit not installed"; fi
+    if systemctl is-enabled nginx.service >/dev/null 2>&1; then
+      chk FAIL "distro nginx.service is enabled (standalone: the panel's own edge must own :80/:443)"
+    else say OK "distro nginx.service not enabled (panel edge owns :80/:443)"; fi
+  elif [ "$TOPOLOGY" != "nginx-direct" ]; then
     # shared edge (owned by the platform, not by this panel) — informational
     if systemctl is-active --quiet haproxy 2>/dev/null; then say INFO "systemd: haproxy active"
     else say INFO "systemd: haproxy not active (panel is unreachable externally — check the shared edge)"; fi
@@ -57,6 +67,16 @@ if [ "$TOPOLOGY" != "nginx-direct" ]; then
   if curl -sf -m 5 "http://127.0.0.1:$PANEL_PORT/health" >/dev/null 2>&1; then
     chk OK "internal nginx /health on 127.0.0.1:$PANEL_PORT"
   else chk FAIL "internal nginx /health on 127.0.0.1:$PANEL_PORT"; fi
+fi
+
+if [ "$TOPOLOGY" = "standalone" ]; then
+  # CP13: the dedicated edge must own :80 AND :443 on this fresh server
+  for p in 80 443; do
+    if ss -tln 2>/dev/null | awk '{print $4}' | grep -qE ":$p\$"; then
+      chk OK "edge port $p listening (ops-terminal-front)"
+    else chk FAIL "edge port $p NOT listening"
+    fi
+  done
 fi
 
 # loopback binding check (never accept external binding of the raw services)

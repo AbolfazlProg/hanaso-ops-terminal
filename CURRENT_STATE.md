@@ -1,6 +1,6 @@
 # CURRENT STATE — HANASO OPS Web Terminal
 
-> آخرین به‌روزرسانی: 2026-11-17 — CP12 (FIX نهایی سازگاری systemd/nginx — حذف سوییچ وابسته به نسخه `-e` که روی باینری واقعی VPS با `nginx: invalid option: "e"` می‌مرد)
+> آخرین به‌روزرسانی: 2026-11-19 — CP13 (نصب مستقل کامل روی Ubuntu تازه — standalone topology: بدون هیچ nginx/HAProxy/Certbot/گواهی قبلی)
 > این فایل وضعیت واقعی را در هر Checkpoint ثبت می‌کند. هیچ ادعای Push/Deploy بدون تأیید نمی‌شود.
 
 ## مأموریت
@@ -44,6 +44,14 @@ Debian 13 trixie / x86_64 / کاربر uid 1001 بدون root / PID1=tini / ngin
 | D22 | CP12: لینت unit فقط روی خطوط `Exec*` انجام می‌شود (کامنت‌های آموزشی unit شکل تاریخی باگ را به‌درستی توصیف می‌کنند)؛ باتری‌ها clean-room دارند (اسویپ بقایای باتری قبلی) و در محیط بازیافتی خودترمیم هستند (تولید CA آزمایشی/گواهی تست در صورت نبود) |
 | D23 | CP12: معیار قبولی production = اجرای verbatim `ExecStart/ExecReload` روی **باینری هم‌کلاس VPS** + تراکنش واقعی systemd 257 (`systemd --user --test` روی unitهای واقعی) + پارسر واقعی (`systemd-analyze verify`). محدودیت ثبت‌شده: manager زنده در این کانتینر بالا نمی‌آید (نبود cgroup قابل‌نوشتن — شواهد ضبط‌شده در باتری)؛ روی VPS همان فایل‌ها بدون تغییر در manager واقعی بارگذاری می‌شوند |
 | D24 | CP12: Installer هویت واقعی باینری nginx را در لاگ نصب ثبت می‌کند (`nginx -V` + error-log-path) تا هر ناهم‌نسخگی آینده بلافاصله قابل تشخیص باشد |
+| D25 | CP13: توپولوژی **standalone** — سرور تازه با صفر پیش‌نیاز؛ Installer با apt بسته توزیع `nginx` را نصب می‌کند (auth_request با `nginx -V` fail-closed اثبات می‌شود؛ در noble بسته واقعی باینری `nginx` است) + certbot؛ دروازه DNS قبل از هر تغییر (ناهمخوانی = توقف با صفر اثر جانبی) |
+| D26 | CP13: unit اختصاصی `ops-terminal-front` (:80/:443) با `User=ops-gw` و فقط `CAP_NET_BIND_SERVICE` (Ambient+Bounding) — بدون root؛ سرویس nginx توزیع disable می‌شود؛ PID فقط یک مرجع دارد (nginx.conf) و هیچ سوییچ وابسته به نسخه‌ای در خط فرمان نیست (قرارداد CP11/CP12) |
+| D27 | CP13: صدور گواهی دو-فازی — فاز A فقط :80 (وب‌روت ACME + ریدایرکت) با include خالی، سپس فاز B رندر vhost :443 با مسیر گواهی واقعی + `nginx -t` + reload؛ شکست صدور = rollback کامل (fail-closed) |
+| D28 | CP13: حالت `--tls-mode self-signed` فقط محیط بسته/آزمایش (هشدار صریح) + تایمر `ops-terminal-tls-renew.timer` (بازتولید زیر ۳۰ روز مانده + فقط reload خود front)؛ حالت acme: certbot.timer + هوک deploy فقط-front |
+| D29 | CP13: front با `$http_host` پورت اصلی را به لایه داخلی می‌رساند — ttyd با `-O` (check-origin) پورت را مقایسه می‌کند و Host بدون پورت هر WS را پشت لبه با پورت غیراستاندارد می‌کشت (باگ واقعی که با مرورگر واقعی در باتری CP13 کشف و رفع شد) |
+| D30 | CP13: uninstall فقط منابع خود پروژه را حذف می‌کند (units/wants/فایل‌ها/وب‌روت/هوک LE/گواهی LE این دامنه با certbot delete/ops-gw)؛ بسته‌های توزیع پیش‌فرض می‌مانند و `--purge-packages` اختیاری است (بعد از uninstall هم قابل اجراست) |
+| D31 | CP13: محیط آزمایش — VM واقعی Ubuntu 24.04 (rootfs از بسته‌های رسمی archive.ubuntu.com؛ Python 3.12.3، tmux 3.4، systemd 255 = همان کلاس VPS) داخل userns؛ محدودیت پلتفرم (بدون cgroup قابل‌نوشتن، بدون KVM، بدون root) مثل CP12 مستند است؛ unitها با `systemd-analyze verify` واقعی Ubuntu 255 و تراکنش‌ها با supervisor وفادار به policy + shim systemctl اجرا و اثبات می‌شوند |
+| D32 | CP13: باتری CP13 = ۵ سناریو (C منفی DNS / D rollback / B مسیر ACME با stub-certbot + ACME round-trip از لبه واقعی :80 / A نصب کامل self-signed با ۵۶ چک / E uninstall) — جمعاً ۱۱۳ PASS و ۰ FAIL + مرورگر واقعی Playwright از پشت رله‌ها: ورود واقعی، `id -u` = 0، side-channel فایل، بقای session — ۸/۸ PASS |
 | D20 | CP11: Rollback شکست نصب: `die()` بعد از اولین تغییر → rollback کامل؛ شاخه production فقط unitهای خود پروژه را متوقف می‌کند (`scripts/ops-systemd.sh`: disable --now + TERM/KILL + reset-failed + حذف فایل‌های unit) و بلوک‌های مدیریت‌شده HAProxy را state-independent می‌جارو (بقایای runهای قبلی هم حذف و reload اعتبارسنجی‌شده) |
 
 ## Checkpoints
@@ -63,6 +71,7 @@ Debian 13 trixie / x86_64 / کاربر uid 1001 بدون root / PID1=tini / ngin
 | CP10 | HOTFIX: پذیرش `PREFLIGHT_CERT_PATH=''` + شاخه صدور certbot واقعی + مسیر ACME صحیح + بازسازی مسیر ACME در reinstall + اعتبارسنجی جفت گواهی + باتری CP10 (سناریوی دقیق VPS) | tag v1.2.1 | ✅ تست و Push شده — در انتظار نصب Production |
 | CP11 | HOTFIX Systemd/Nginx: PID یکتا + `daemon off` + سیاست Restart محدود + مالکیت پوشه‌ها + rollback قطع‌کننده حلقه + باتری CP11 | f437c4d (tag v1.2.2) | ✅ Push شده — `-e stderr` آن روی باینری واقعی VPS می‌مرد → CP12 |
 | CP12 | FIX نهایی سازگاری systemd/nginx: حذف `-e stderr` از unit و Installer (D21) + ثبت هویت باینری nginx در لاگ نصب (D24) + باتری CP12 (ماتریس باینری + اجرای verbatim روی Ubuntu 1.18.0 + تراکنش واقعی systemd + ۱۱ گام پذیرش + rollback + leftover-reinstall + quick-install واقعی) | 8351927 (tag v1.2.3) | ✅ ۱۰۱ PASS + رگرسیون‌ها سبز + نصب واقعی تک‌خطی از تگ GitHub (SHA OK، e2E، uninstall پاک) — Push شده |
+| CP13 | نصب مستقل Ubuntu تازه (standalone): preflight گسترش‌یافته + apt nginx/certbot + دروازه DNS + unit front با CAP_NET_BIND_SERVICE + صدور دو-فازی + self-signed/ACME + uninstall project-only + باتری ۵ سناریویی (۱۱۳ PASS/۰ FAIL) + مرورگر واقعی ۸/۸ + رفع باگ واقعی `$http_host` (check-origin ttyd) | tag v1.3.0 | ✅ Push شده |
 
 ## نتایج آزمون (خلاصه)
 

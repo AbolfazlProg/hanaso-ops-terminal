@@ -53,6 +53,19 @@ def log(msg):
     sys.stderr.flush()
 
 
+def pid_alive(pid):
+    """Liveness via kill(pid, 0) — NOT /proc/<pid>.
+    The CP13 VM binds the OUTER /proc (this kernel refuses fresh proc mounts
+    inside the userns), so /proc/<pid> sees the host pid namespace and inner
+    pids would never be found there. kill(pid, 0) works within the shared
+    pid namespace of the whole VM session (and on the plain sandbox too)."""
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def parse_unit(path):
     """Minimal systemd unit parser: sections + per-key lists, comments kept."""
     unit = {"path": path, "name": os.path.basename(path), "_raw": open(path).read()}
@@ -319,8 +332,7 @@ class UnitRuntime:
         for _ in range(60):
             time.sleep(0.2)
             st = self._read()
-            if st.get("ActiveState") in ("inactive",) or not os.path.exists(
-                    "/proc/%s" % sup):
+            if st.get("ActiveState") in ("inactive",) or not pid_alive(sup):
                 break
         st = self._read()
         st["supervisor_pid"] = 0
@@ -352,7 +364,7 @@ def main():
 
     if args.action == "start":
         st = rt._read()
-        if st.get("supervisor_pid") and os.path.exists("/proc/%s" % st["supervisor_pid"]):
+        if st.get("supervisor_pid") and pid_alive(st["supervisor_pid"]):
             print("%s already running (supervisor pid %s)" % (name, st["supervisor_pid"]))
             return 0
         if args.foreground:

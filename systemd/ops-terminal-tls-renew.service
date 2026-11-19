@@ -1,0 +1,11 @@
+[Unit]
+Description=HANASO OPS Terminal — self-signed TLS regeneration (CP13, one-shot)
+Documentation=https://github.com/AbolfazlProg/hanaso-ops-terminal
+ConditionPathExists=/opt/ops-terminal/tls-renew.sh
+
+[Service]
+Type=oneshot
+ExecStart=/opt/ops-terminal/tls-renew.sh
+# The renewal script regenerates the certificate ONLY when it is within 30
+# days of expiry and reloads ONLY the panel's own front unit.
+NoNewPrivileges=yes

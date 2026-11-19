@@ -105,3 +105,24 @@ Sandbox اجازه root واقعی نمی‌دهد؛ همان کد مسیر Prod
 ## محدودیت ثبت‌شده (صادقانه)
 
 manager زنده‌ی systemd (system یا user) در این کانتینر قابل راه‌اندازی نیست: `/sys/fs/cgroup` یک tmpfs خارجی است، mount-over آن ممنوع است و manager واقعی در `manager_setup_cgroup` خارج می‌شود (شواهد ضبط‌شده: `strace` → `exit_group(1)` بلافاصله پس از `/proc/self/cgroup`؛ `cgroup.c:4160` «Cannot determine cgroup we are running in»؛ پیام ضبط‌شده CP11 «Failed to create /k8s.io/.../init.scope control group: Read-only file system»). پالیسی unitها با (a) پارسر واقعی systemd، (b) تراکنش واقعی manager و (c) supervisor وفادار به خطوط Exec آزموده می‌شود و روی VPS همان فایل‌ها بدون تغییر در manager واقعی بارگذاری می‌شوند.
+
+
+## CP13 — نصب مستقل روی Ubuntu تازه (v1.3.0) — 2026-11-19
+
+محیط: VM واقعی Ubuntu 24.04 LTS ساخته‌شده از بسته‌های رسمی `archive.ubuntu.com` (Python 3.12.3،
+tmux 3.4، systemd 255 — همان کلاس VPS؛ گزارش هویت: `/root/.cp13-identity.txt`)، بدون nginx و
+بدون certbot (شبیه‌سازی دقیق «سرور تازه»). محدودیت پلتفرم مثل CP12 مستند است: مدیر زنده systemd
+در این Sandbox قابل اجرا نیست (cgroup فقط-خواندنی)؛ unitها با `systemd-analyze verify` واقعی
+Ubuntu 255 راستی‌آزمایی و تراکنش‌ها با supervisor وفادار به policy + shim systemctl اجرا شده‌اند.
+
+| سناریو | شرح | نتیجه |
+|--------|-----|-------|
+| C | دروازه DNS: hosts → 87.107.129.210 (IP قدیمی واقعی مأموریت) + `--server-ip 45.135.242.140` → توقف قبل از هر تغییر | ۸ PASS / ۰ FAIL |
+| D | شکست عمدی بعد از راه‌افتادن سرویس‌ها (گواهی نامعتبر) → rollback کامل: صفر فایل، صفر unit، صفر listener، صفر پروسه؛ بسته‌ها با NOTE حفظ شدند | ۱۰ PASS / ۰ FAIL |
+| B | مسیر ACME واقعی (فاز A → ACME round-trip از لبه واقعی :80 → certbot → فاز B → e2e TLS سخت‌گیرانه → هوک deploy → certbot.timer) با stub-certbot؛ uninstall دو حالته (حفظ/حذف بسته‌ها) | ۲۷ PASS / ۰ FAIL |
+| A | نصب کامل self-signed: apt nginx + auth_request (nginx -V) + systemd-analyze verify + مالکیت‌ها + لبه :80/:443 + TLS + e2e کامل + health-check + 429/423 + بقای قفل در restart + چرخه stop/start + تمدید خودکار + reinstall idempotent + StartLimit sabotage | ۵۶ PASS / ۰ FAIL |
+| E | uninstall نهایی: صفر من باقی‌مانده (پورت‌ها/units/wants/فایل‌ها/هوک LE/tmpdir/ابزار)؛ بسته nginx حفظ (پیش‌فرض مستند) | ۱۲ PASS / ۰ FAIL |
+| مرورگر | Chromium واقعی (Playwright) از پشت رله‌های transport-only → TLS واقعی :443: ریدایرکت، ورود واقعی، xterm، `id -u` = 0 (اثبات فایل + متن ترمینال)، hostname، create/read/delete فایل، reconnect با کوکی، بقای long-run در tmux | ۸ PASS / ۰ FAIL |
+
+جمع کل: **۱۱۳ PASS / ۰ FAIL (باتری) + ۸ PASS / ۰ FAIL (مرورگر)** — شامل رفع یک باگ واقعی کشف‌شده
+توسط همین مرورگر (front باید با `$http_host` پورت را حفظ کند — ttyd با `-O` origin را با پورت مقایسه می‌کند).

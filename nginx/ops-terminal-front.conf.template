@@ -1,0 +1,53 @@
+# ==========================================================================
+# HANASO OPS Web Terminal — PUBLIC EDGE nginx (TEMPLATE — rendered by
+# scripts/install.sh for the CP13 standalone topology: fresh Ubuntu server,
+# nothing else owns :80/:443).
+#
+# This instance is a DEDICATED panel unit (ops-terminal-front.service) with
+# its own master config — the distro nginx.service stays disabled.
+#
+#   * :80  — ACME HTTP-01 webroot + 301 redirect to HTTPS (phase A: this is
+#            the only vhost while certbot issues the certificate)
+#   * :443 — rendered in phase B via ops-terminal-https.conf (include below)
+#
+# Placeholders: {{OPS_DOMAIN}} {{LISTEN_HTTP}} {{LISTEN_HTTP_V6}}
+#               {{ACME_WEBROOT}} {{NGINX_LOG_PREFIX}}
+# Managed file — do not edit manually. Remove via scripts/uninstall.sh
+# ==========================================================================
+
+# Outer brute-force cap on the login endpoint. This edge sees REAL client
+# addresses ($binary_remote_addr = the internet client), so the zone is a
+# true per-IP cap; the gateway's progressive per-IP lockout runs behind it.
+limit_req_zone $binary_remote_addr zone=ops_login:10m rate=24r/m;
+
+# WebSocket upgrade map (unique variable name — this is a standalone config).
+map $http_upgrade $ops_connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen {{LISTEN_HTTP}};
+    {{LISTEN_HTTP_V6}}
+    server_name {{OPS_DOMAIN}};
+
+    # ACME HTTP-01 webroot (certbot issuance/renewal through OUR OWN listener)
+    location /.well-known/acme-challenge/ {
+        root {{ACME_WEBROOT}};
+        default_type "text/plain";
+    }
+
+    # everything else: force HTTPS
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# access log format WITHOUT query strings (never logs tokens/secrets in URLs)
+log_format ops_terminal_front '$remote_addr [$time_local] "$request_method $uri" $status '
+                        '$body_bytes_sent "$http_user_agent" rt=$request_time';
+
+# the :443 TLS server block lives in its own include so the installer can
+# start this edge BEFORE any certificate exists (phase A) and add TLS in
+# phase B with a validated reload.
+include /etc/ops-terminal/nginx-front/ops-terminal-https.conf;

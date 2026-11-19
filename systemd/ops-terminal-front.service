@@ -1,0 +1,52 @@
+[Unit]
+Description=HANASO OPS Terminal — dedicated public edge nginx (standalone :80/:443, TLS for the ops panel)
+Documentation=https://github.com/AbolfazlProg/hanaso-ops-terminal
+After=network-online.target ops-terminal-gateway.service
+Wants=network-online.target
+
+# CP11 bound restart policy: a real failure restarts (on-failure), but a
+# persistently broken unit is STOPPED after 5 attempts inside 120s instead of
+# looping forever. After the limit the unit is failed and stays down until an
+# operator (or the installer) intervenes.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# CP13 standalone: this is the panel's OWN edge nginx (the distro
+# nginx.service stays disabled). It binds :80 and :443 as the UNPRIVILEGED
+# ops-gw identity: no root, no setuid, no extra privileges — the ONLY
+# capability granted is CAP_NET_BIND_SERVICE (ambient + bounding), which is
+# exactly what a non-root listener on 80/443 requires.
+User=ops-gw
+Group=ops-gw
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# The PID file is defined EXACTLY ONCE — in nginx.conf (pid directive).
+# The command line carries NO version-dependent nginx option (CP12) and NO
+# -g 'pid …;' duplicate (CP11). daemon off is set in nginx.conf so the
+# master stays in the foreground for Type=simple.
+ExecStartPre=/usr/sbin/nginx -c /etc/ops-terminal/nginx-front/nginx.conf -t
+ExecStart=/usr/sbin/nginx -c /etc/ops-terminal/nginx-front/nginx.conf
+ExecReload=/usr/sbin/nginx -c /etc/ops-terminal/nginx-front/nginx.conf -s reload
+
+Restart=on-failure
+RestartSec=3
+
+# --- hardening (non-root, no shell; edge ports are the only extra grant) ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/ops-terminal/nginx-front /var/lib/ops-terminal /var/log/ops-terminal
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

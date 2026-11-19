@@ -1,0 +1,11 @@
+[Unit]
+Description=HANASO OPS Terminal — self-signed TLS renewal timer (CP13; daily check)
+
+[Timer]
+# daily check; the one-shot service exits 0 immediately when the certificate
+# is still valid for more than 30 days
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target

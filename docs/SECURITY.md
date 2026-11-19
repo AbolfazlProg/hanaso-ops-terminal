@@ -36,3 +36,22 @@
 
 - بدون MFA؛ قوت رمز تصادفی ۲۴ کاراکتری + قفل Brute-force جبران‌کننده است ولی جای MFA را نمی‌گیرد.
 - Restart سرویس Gateway، Sessionهای فعال را باطل نمی‌کند (کوکی امضاشده stateless است) — Logout خودکار Server-side revocation دارد.
+
+
+## توپولوژی standalone (v1.3.0) — نکات امنیتی اختصاصی
+
+- **لبه اختصاصی بدون root**: unit `ops-terminal-front` با `User=ops-gw` اجرا می‌شود و تنها
+  قابلیتِ اعطاشده `CAP_NET_BIND_SERVICE` است (Ambient + Bounding) — یعنی فقط اجازه bind به
+  :80/:443؛ هیچ root و هیچ setuid‌ای در کار نیست و بقیه hardeningها (NoNewPrivileges،
+  ProtectSystem=strict، …) مثل بقیه unitها فعال است.
+- **سرویس nginx توزیع غیرفعال می‌شود** — مالک انحصاری لبه همان unit خود پنل است و در
+  uninstall هم غیرفعال باقی می‌ماند؛ هیچ سرویس ناشناسی روی لبه اجرا نمی‌شود.
+- **ضد جعل XFF**: front همیشه `X-Forwarded-For` را با `$remote_addr` واقعی بازنویسی می‌کند؛
+  internal nginx فقط-loopback است؛ قفل per-IP گات‌وی قابل جعل نیست.
+- **دروازه DNS قبل از هر تغییر**: A record باید به همین سرور اشاره کند، وگرنه نصب با صفر
+  اثر جانبی متوقف می‌شود (بدون صدور گواهی، بدون باز کردن لبه).
+- **self-signed فقط محیط بسته**: `--tls-mode self-signed` برای پنل عمومی توصیه نمی‌شود و در
+  خروجی Installer با هشدار صریح اعلام می‌شود؛ مسیر پیش‌فرض (acme) گواهی واقعی Let's Encrypt
+  می‌گیرد و تمدید آن با certbot.timer + هوک deploy (فقط reload خود front) انجام می‌شود.
+- **پارتیشن خطا**: شکست صدور گواهی → rollback کامل (هیچ چیزی نصب یا exposed نمی‌ماند) —
+  در باتری CP13 با سناریوی D اثبات شده است.

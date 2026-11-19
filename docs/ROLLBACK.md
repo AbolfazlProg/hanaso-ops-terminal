@@ -61,3 +61,15 @@ bash scripts/uninstall.sh --yes          # یا --purge برای لاگ‌ها/B
 | Session tmux خراب/گریزان شد | `TMUX_TMPDIR=/var/tmp/ops-terminal tmux kill-server` → اتصال بعدی Session تازه می‌سازد |
 | قفل HAProxy: «config is already broken» | `haproxy.cfg` از قبل broken است — Installer دست نمی‌زند؛ config را اصلاح یا از backup برگردانید، بعد نصب |
 | کامل بازگشت به قبل از مأموریت | uninstall + حذف `/var/backups/ops-terminal` + حذف کلون `/tmp/hanaso-ops-install` — همین |
+
+
+### CP13 — رفتار Rollback در توپولوژی standalone
+
+- ثبت کامل دایرکتوری‌های سطح‌بالا در `CREATED_PATHS` (اصلاح CP13): هر شکست بعد از اولین تغییر
+  باعث حذف کامل `/opt/ops-terminal`، `/etc/ops-terminal`، `/var/{lib,log,tmp}/ops-terminal`،
+  `/run/ops-terminal` و `/var/www/ops-terminal` می‌شود — باتری CP13 سناریوی D این را با
+  «گواهی نامعتبر بعد از راه‌افتادن سرویس‌ها» اثبات می‌کند (پورت‌ها آزاد، unitها حذف، بدون هیچ
+  پروسه باقی‌مانده).
+- **بسته‌های توزیع** (nginx/certbot) عمداً نصب‌شده باقی می‌مانند و rollback با یک NOTE شفاف
+  اعلام می‌کند (روی سرور اختصاصی بی‌ضرر است؛ حذف اختیاری: `apt-get purge nginx certbot`).
+- ثبت هویت باینری nginx خارجیِ کنارگذاشته در `/var/backups/ops-terminal/<ts>/nginx-foreign/`.

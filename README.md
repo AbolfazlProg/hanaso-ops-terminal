@@ -1,7 +1,8 @@
 # HANASO OPS Web Terminal
 
-پنل ترمینال تحت وب با **ROOT Shell واقعی** برای VPS مشترک HANASO — پشت احراز هویت مستقل،
-قفل Brute-Force و HTTPS روی Reverse Proxy موجود — بدون وابستگی عملیاتی به GitHub Actions، SSH از Sandbox یا Cloudflare Tunnel.
+پنل ترمینال تحت وب با **ROOT Shell واقعی** برای HANASO — پشت احراز هویت مستقل، قفل Brute-Force و HTTPS — بدون وابستگی عملیاتی به GitHub Actions، SSH از Sandbox یا Cloudflare Tunnel.
+
+از **v1.3.0 (CP13)** علاوه بر توپولوژی‌های ادغام با زیرساخت موجود، یک **نصب مستقل کامل روی Ubuntu تازه** هم پشتیبانی می‌شود: سروری که هیچ nginx/HAProxy/Certbot/گواهی‌ای ندارد، فقط با اجرای دستور نصب به پنل HTTPS دارای Root Web Terminal تبدیل می‌شود (nginx با auth_request، certbot، گواهی Let's Encrypt، وب‌روت ACME و دو Listener واقعی :80/:443 همه توسط خود Installer نصب و راه‌اندازی می‌شوند).
 
 ## نصب تک‌خطی (VPS — به‌عنوان root)
 
@@ -14,13 +15,43 @@ curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/ma
 - بوت‌استرپ `quick-install.sh` مخزن را می‌گیرد (git یا tarball)، مانیفست `SHA256SUMS` را **fail-closed** راستی‌آزمایی می‌کند و سپس Installer رسمی را اجرا می‌کند؛ بدون root اجرا نمی‌شود (مگر `--sandbox`).
 - **توصیه‌شده برای VPS — پین به نسخه منتشرشده:**
   ```bash
-  curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.2.3/quick-install.sh \
+  curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.3.0/quick-install.sh \
     | bash -s -- --domain ops.hanaso.ir --acme-email admin@hanaso.ir
   ```
 - پین‌کردن شاخه: `... | QUICK_INSTALL_REF=v1.0.0 bash -s -- --domain ops.hanaso.ir` — نکته: CDN خام تا ~۵ دقیقه بعد از Push ممکن است نسخه قبلی شاخه `main` را سرو کند؛ URL تگ‌دار (بالا) این مسئله را ندارد.
 - برای نصب قابل‌بازبینی، مخزن را Clone کنید و `SHA256SUMS` را خودتان چک کنید — راهنمای کامل: [`docs/INSTALL.md`](docs/INSTALL.md)
 
-## معماری — هر دو توپولوژی Reverse Proxy پشتیبانی می‌شود
+## معماری — سه توپولوژی
+
+### standalone (جدید در v1.3.0 — سرور تازه، بدون هیچ Reverse Proxy قبلی)
+
+```
+مرورگر (Owner)
+   │  HTTPS (wss) — :443 (و :80 برای ACME/ریدایرکت)
+   ▼
+ops-terminal-front.service — nginx اختصاصی پنل (کاربر ops-gw + CAP_NET_BIND_SERVICE؛ سرویس nginx توزیع غیرفعال می‌ماند)
+   │  TLS (Let's Encrypt یا self-signed) — auth_request در لایه داخلی
+   ▼
+nginx داخلی مستقل (127.0.0.1:7680 — فقط loopback)
+   ├──► 127.0.0.1:7682  ops-terminal-gateway
+   └──► 127.0.0.1:7681  ttyd 1.7.7 (root) → tmux «ops» → ROOT Shell واقعی
+```
+
+### nginx-direct (nginx موجود TLS را خاتمه می‌دهد)
+
+```
+مرورگر (Agent/Owner)
+   │  HTTPS (wss) — پورت 443 موجود nginx
+   ▼
+nginx فعلی سرور (Virtual Host اختصاصی ops.hanaso.ir)
+   │  auth_request → کوکی Session امضاشده
+   │  limit_req    → قفل Brute-Force
+   ├──► 127.0.0.1:7682  ops-terminal-gateway  (Auth Gateway — Python stdlib، کاربر ops-gw)
+   └──► 127.0.0.1:7681  ttyd 1.7.7 (کاربر root) → tmux session «ops» → ROOT Shell واقعی
+```
+
+### haproxy-front (HAProxy مالک 443 عمومی است — توپولوژی واقعی VPS مشترک)
+
 
 ```
 nginx-direct (nginx مستقیماً TLS را روی 443 خاتمه می‌دهد):

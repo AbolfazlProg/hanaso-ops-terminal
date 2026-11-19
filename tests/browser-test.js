@@ -36,6 +36,11 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   const mapHost = arg('map-host', '');
   const expectUid = arg('expect-uid', '0');
   const outDir = arg('out', '/tmp/ops-browser-shots');
+  // CP13: the shell writes proof files INSIDE the clean VM; the checker runs
+  // on the sandbox side — --file-root prefixes the CHECK paths with the VM's
+  // rootfs (the command strings keep the raw /tmp paths the shell sees).
+  const fileRoot = arg('file-root', '');
+  const pf = (p) => (fileRoot ? (fileRoot.replace(/\/$/, '') + p) : p);
   fs.mkdirSync(outDir, { recursive: true });
 
   if (!pwFile || !fs.existsSync(pwFile)) {
@@ -45,12 +50,13 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   const password = fs.readFileSync(pwFile, 'utf-8').trim();
 
   const stamp = Date.now().toString(36);
-  const PROOF = {
+  const RAW = {
     uid: `/tmp/ops-browser-uid-${stamp}.txt`,
     host: `/tmp/ops-browser-host-${stamp}.txt`,
     file: `/tmp/ops-browser-file-${stamp}.txt`,
     disconnect: `/tmp/ops-browser-disc-${stamp}.txt`,
   };
+  const PROOF = Object.fromEntries(Object.entries(RAW).map(([k, v]) => [k, pf(v)]));
   for (const f of Object.values(PROOF)) { try { fs.unlinkSync(f); } catch (e) {} }
 
   const results = [];
@@ -59,7 +65,15 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
   const launchArgs = [];
   if (mapHost) launchArgs.push(`--host-resolver-rules=MAP ${mapHost} 127.0.0.1`);
-  const browser = await chromium.launch({ headless: true, args: launchArgs });
+  // CP13: self-signed TLS mode — accept the panel's own certificate in the
+  // clean-VM battery (the production ACME path is NOT affected; the flag is
+  // opt-in and test-only).
+  const insecure = process.argv.indexOf('--insecure') > -1;
+  const browser = await chromium.launch({
+    headless: true,
+    args: launchArgs,
+    ...(insecure ? { ignoreHTTPSErrors: true } : {}),
+  });
 
   // ---- renderer-independent terminal text reader ----
   const readTerminal = async (page) => page.evaluate(() => {
@@ -139,7 +153,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     };
 
     // ---------- 4. type commands; verify via filesystem side-channel ----------
-    await typeCmd('id -u > ' + PROOF.uid + '; cat ' + PROOF.uid);
+    await typeCmd('id -u > ' + RAW.uid + '; cat ' + RAW.uid);
     const uidFileOk = await waitFileEq(PROOF.uid, expectUid);
     let out = await readTerminal(page);
     const uidDomOk = out.split('\n').some(l => l.trim() === String(expectUid).trim());
@@ -151,15 +165,15 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     }
     await page.screenshot({ path: path.join(outDir, '02-terminal.png') });
 
-    await typeCmd('hostname > ' + PROOF.host);
+    await typeCmd('hostname > ' + RAW.host);
     const hostOk = await waitFileEq(PROOF.host, os.hostname());
     hostOk ? ok('hostname -> ' + os.hostname() + ' (side-channel file proof)')
            : bad('hostname file proof failed');
 
     const marker = 'BROWSER' + Date.now().toString(36);
-    await typeCmd('echo ' + marker + ' > ' + PROOF.file);
+    await typeCmd('echo ' + marker + ' > ' + RAW.file);
     if (await waitFileEq(PROOF.file, marker)) {
-      await typeCmd('rm ' + PROOF.file);
+      await typeCmd('rm ' + RAW.file);
       const gone = await waitFileGone(PROOF.file);
       gone ? ok('file create/read/delete proven via side-channel (' + marker + ')')
            : bad('file delete failed (still present)');
@@ -169,7 +183,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
     // ---------- 5. browser disconnect + reconnect (cookie + tmux survive) ----------
     const stayMarker = 'STAY' + Date.now().toString(36);
-    await typeCmd('echo ' + stayMarker + '; sleep 6; echo AFTER_DISCONNECT > ' + PROOF.disconnect);
+    await typeCmd('echo ' + stayMarker + '; sleep 6; echo AFTER_DISCONNECT > ' + RAW.disconnect);
     await page.close();            // tab closed = browser "disconnect"
     await sleep(2500);
     page = await ctx.newPage();    // new tab, same profile (cookie kept)

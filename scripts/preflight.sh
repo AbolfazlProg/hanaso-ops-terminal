@@ -82,17 +82,26 @@ NGINX_BIN="${NGINX_BIN_ARG:-$(command -v nginx 2>/dev/null || echo /usr/sbin/ngi
 if [ -x "$NGINX_BIN" ]; then
   NGX_VER="$("$NGINX_BIN" -v 2>&1 | sed 's/.*\///')"
   ok "nginx found: $NGINX_BIN ($NGX_VER)"
+  kv PREFLIGHT_NGINX_PRESENT 1
   if "$NGINX_BIN" -V 2>&1 | tr ' ' '\n' | grep -q -- --with-http_auth_request_module; then
     ok "nginx has http_auth_request_module (required)"
     kv PREFLIGHT_NGINX_AUTH_REQUEST 1
   else
-    bad "nginx LACKS http_auth_request_module (install nginx-core/nginx-full, not nginx-light)"
+    bad "nginx LACKS http_auth_request_module (the distro 'nginx' package has it: apt-get install nginx)"
     kv PREFLIGHT_NGINX_AUTH_REQUEST 0
   fi
   kv PREFLIGHT_NGINX_BIN "$NGINX_BIN"
 else
-  bad "nginx not found — this installer needs an nginx binary (internal auth-gateway proxy)"
+  warn "nginx not found — standalone topology: the installer apt-installs it (other topologies need it pre-installed)"
+  kv PREFLIGHT_NGINX_PRESENT 0
+  kv PREFLIGHT_NGINX_AUTH_REQUEST 0
   kv PREFLIGHT_NGINX_BIN ""
+fi
+kv PREFLIGHT_ARCH "$(uname -m)"
+if command -v apt-get >/dev/null 2>&1; then
+  kv PREFLIGHT_APT_OK 1
+else
+  kv PREFLIGHT_APT_OK 0
 fi
 
 # --- 5. nginx include layout (nginx-direct topology only) ------------------
@@ -234,9 +243,36 @@ case ",$LISTEN443," in
       warn "an ops-terminal managed block already exists in $HAPROXY_CFG (idempotent update)"
     fi
     ;;
-  *) bad "nothing (or an unknown service) is listening on :443 — cannot add an HTTPS vhost" ;;
+  *)
+    if [ -z "$(printf '%s' "$LISTEN443" | tr -d ',')" ] && [ -z "$(printf '%s' "$LISTEN80" | tr -d ',')" ]; then
+      # CP13 v1.3.0: FRESH SERVER — nothing owns the edge. The installer
+      # brings its own nginx (with auth_request), certbot, TLS and listeners.
+      TOPOLOGY="standalone"
+      ok "nothing owns :80/:443 — FRESH SERVER (standalone install: nginx + certbot + TLS + edge listeners are installed by this installer)"
+      if command -v apt-get >/dev/null 2>&1; then
+        ok "apt-get available (installer can install the distro nginx + certbot packages)"
+        kv PREFLIGHT_APT_OK 1
+      else
+        bad "apt-get not found — standalone install cannot fetch nginx/certbot"
+        kv PREFLIGHT_APT_OK 0
+      fi
+      if [ -d /var/www/html ]; then ok "/var/www/html exists"; else info "/var/www/html missing (fine — the standalone webroot /var/www/ops-terminal is created by the installer)"; fi
+    else
+      bad "nothing (or an unknown service) is listening on :443 — cannot add an HTTPS vhost"
+    fi
+    ;;
 esac
-kv PREFLIGHT_TOPOLOGY "$TOPOLOGY"
+PREFLIGHT_TOPOLOGY="$TOPOLOGY"
+# CP13 idempotent reinstall: an EXISTING standalone install has its own front
+# nginx LISTENING on :80/:443 — raw listener-based detection would classify
+# that as nginx-direct. The env file records the truth; it wins.
+if [ "$TOPOLOGY" != "standalone" ] \
+   && [ "$(sed -n 's/^OPS_TOPOLOGY=//p' /etc/ops-terminal/env 2>/dev/null | head -n1)" = "standalone" ]; then
+  TOPOLOGY="standalone"
+  PREFLIGHT_TOPOLOGY="standalone"
+  ok "existing standalone install detected (ops-terminal-front owns the edge) — idempotent reinstall path"
+fi
+kv PREFLIGHT_TOPOLOGY "$PREFLIGHT_TOPOLOGY"
 
 # --- 7. python3 -----------------------------------------------------------
 PY="$(command -v python3 2>/dev/null || echo /usr/bin/python3)"
@@ -262,11 +298,22 @@ fi
 if command -v curl >/dev/null 2>&1; then ok "curl found"; kv PREFLIGHT_CURL 1
 else warn "curl missing (needed for cert issuance + health checks)"; kv PREFLIGHT_CURL 0; fi
 
-# --- 10. local ports free (loopback panel services) -----------------------
+# --- 10. local ports free (loopback panel services + the edge) -------------
 for P in 7680 7681 7682; do
   if ss -tln 2>/dev/null | awk '{print $4}' | grep -qE ":$P\$"; then
     bad "port $P already in use on this host"; kv "PREFLIGHT_PORT_${P}_FREE" 0
   else ok "port $P free (loopback service)"; kv "PREFLIGHT_PORT_${P}_FREE" 1; fi
+done
+# edge ports (standalone topology REQUIRES both free; shared topologies own
+# one of them themselves — informational only here)
+for P in 80 443; do
+  if ss -tln 2>/dev/null | awk '{print $4}' | grep -qE ":$P\$"; then
+    info "port $P in use (edge owner: $(ss -tlnp 2>/dev/null | awk -v p=":$P" '$4 ~ p"$" {print $6}' | head -1))"
+    kv "PREFLIGHT_PORT_${P}_FREE" 0
+  else
+    info "port $P free"
+    kv "PREFLIGHT_PORT_${P}_FREE" 1
+  fi
 done
 
 # --- 11. existing installation -------------------------------------------

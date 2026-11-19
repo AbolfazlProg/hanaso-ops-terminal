@@ -3,7 +3,7 @@
 # HANASO OPS Web Terminal — one-line remote installer (bootstrap)
 #
 # THE ONE-LINER (on the VPS, as root):
-#   curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/main/quick-install.sh \
+#   curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.3.0/quick-install.sh \
 #     | bash -s -- --domain ops.hanaso.ir --acme-email admin@hanaso.ir
 #
 # What this bootstrap does:
@@ -21,10 +21,17 @@
 #   QUICK_INSTALL_SKIP_SHA  set to 1 to skip the SHA256SUMS check (NOT recommended)
 #
 # Pin a release:
-#   curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/main/quick-install.sh \
-#     | QUICK_INSTALL_REF=v1.0.0 bash -s -- --domain ops.hanaso.ir
+#   curl -fsSL https://raw.githubusercontent.com/AbolfazlProg/hanaso-ops-terminal/v1.3.0/quick-install.sh \
+#     | QUICK_INSTALL_REF=v1.3.0 bash -s -- --domain ops.hanaso.ir --tls-mode acme
+#
+# Standalone fresh Ubuntu (v1.3.0): the installer brings nginx (auth_request
+# proven with nginx -V) + certbot + TLS + the :80/:443 edge itself — no prior
+# reverse proxy, certificate or webroot is required. A DNS A record pointing
+# the domain at THIS server is the only prerequisite (the installer stops
+# BEFORE any change if it does not match).
 #
 # The full flag list of the real installer (--domain, --acme-email,
+# --tls-mode acme|self-signed, --topology standalone,
 # --tls-cert/--tls-key, --http-port/--https-port, --yes, --sandbox,
 # --sandbox-topology haproxy, ...) is documented in scripts/install.sh.
 #

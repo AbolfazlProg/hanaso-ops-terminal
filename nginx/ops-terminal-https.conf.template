@@ -1,0 +1,59 @@
+# ==========================================================================
+# HANASO OPS Web Terminal — PUBLIC EDGE nginx :443 TLS vhost (TEMPLATE —
+# rendered by scripts/install.sh in phase B, once the certificate exists).
+#
+# Terminates TLS for {{OPS_DOMAIN}} on the panel's OWN edge and proxies the
+# whole site to the internal loopback nginx (127.0.0.1:{{PANEL_PORT}}), which
+# runs the auth_request gate + ttyd WebSocket routing. WebSocket upgrades and
+# very long-lived sessions are passed through end-to-end.
+#
+# Placeholders: {{OPS_DOMAIN}} {{LISTEN_HTTPS}} {{LISTEN_HTTPS_V6}}
+#               {{TLS_CERT}} {{TLS_KEY}} {{PANEL_PORT}} {{NGINX_LOG_PREFIX}}
+# Managed file — do not edit manually. Remove via scripts/uninstall.sh
+# ==========================================================================
+
+server {
+    listen {{LISTEN_HTTPS}} ssl;
+    {{LISTEN_HTTPS_V6}}
+    server_name {{OPS_DOMAIN}};
+
+    ssl_certificate     {{TLS_CERT}};
+    ssl_certificate_key {{TLS_KEY}};
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_session_cache   shared:OpsTerminalFrontTLS:5m;
+    ssl_session_timeout 1h;
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    access_log {{NGINX_LOG_PREFIX}}access.log ops_terminal_front;
+    error_log  {{NGINX_LOG_PREFIX}}error.log warn;
+
+    client_max_body_size 1m;
+
+    location / {
+        # NOTE: X-Forwarded-For is OVERWRITTEN with the real edge client —
+        # any client-supplied XFF is dropped here, so the gateway's per-IP
+        # lockout behind the loopback internal nginx cannot be spoofed.
+        proxy_pass http://127.0.0.1:{{PANEL_PORT}};
+        proxy_http_version 1.1;
+        # $http_host keeps the ORIGINAL Host INCLUDING any non-standard port
+        # (e.g. ops.hanaso.ir:8443) — ttyd's --check-origin (-O) compares the
+        # browser Origin against this header, so dropping the port would kill
+        # every WebSocket session behind a port-forwarded edge.
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $ops_connection_upgrade;
+        # long-lived interactive sessions (WebSocket terminal)
+        proxy_read_timeout 7d;
+        proxy_send_timeout 7d;
+        proxy_buffering off;
+        proxy_request_buffering off;
+    }
+}
+# ====================== end HANASO OPS Web Terminal =======================

@@ -81,7 +81,7 @@ ops_env_validate() {
     PREFLIGHT_DOMAIN)                    re='^[A-Za-z0-9.-]+$' ;;
     PREFLIGHT_OS)                        re='^[a-z]+$' ;;
     PREFLIGHT_OS_VERSION)                re='^[0-9.]+$' ;;
-    PREFLIGHT_TOPOLOGY)                  re='^(nginx-direct|haproxy-front|haproxy-tcp-passthrough|unknown)$' ;;
+    PREFLIGHT_TOPOLOGY)                  re='^(nginx-direct|haproxy-front|haproxy-tcp-passthrough|standalone|unknown)$' ;;
     PREFLIGHT_HAPROXY_VERSION)           re='^[0-9.]+$' ;;
     PREFLIGHT_HAPROXY_BIND_MODE)         re='^(ssl-term|tcp-passthrough|unknown)$' ;;
     PREFLIGHT_HAPROXY_CRT_STYLE)         re='^(dir|file|crt-list|none)$' ;;
@@ -96,10 +96,13 @@ ops_env_validate() {
     PREFLIGHT_NGINX_ENABLE_DIR|PREFLIGHT_CERT_PATH|PREFLIGHT_CERT_KEY)
                                           re='^[A-Za-z0-9_./-]*$' ;;
     PREFLIGHT_IS_ROOT|PREFLIGHT_SYSTEMD|PREFLIGHT_NGINX_AUTH_REQUEST| \
+    PREFLIGHT_NGINX_PRESENT|PREFLIGHT_APT_OK| \
     PREFLIGHT_PYTHON_OK|PREFLIGHT_CURL|PREFLIGHT_EXISTING_VHOST| \
     PREFLIGHT_EXISTING_INSTALL|PREFLIGHT_DNS_MATCH|PREFLIGHT_BBB| \
+    PREFLIGHT_PORT_80_FREE|PREFLIGHT_PORT_443_FREE| \
     PREFLIGHT_PORT_7681_FREE|PREFLIGHT_PORT_7682_FREE|PREFLIGHT_PORT_7680_FREE)
                                           re='^[01]$' ;;
+    PREFLIGHT_ARCH)                       re='^[A-Za-z0-9_-]*$' ;;
     PREFLIGHT_DNS_IPS|PREFLIGHT_HOST_IPS)  re='^([0-9]{1,3}\.){3}[0-9]{1,3}( ([0-9]{1,3}\.){3}[0-9]{1,3})* *$|^(ipv6:)?[0-9A-Fa-f:]*$' ;;
     *) printf '%s\n' "ops-env: unknown key (fail closed): $key" >&2; return 1 ;;
   esac

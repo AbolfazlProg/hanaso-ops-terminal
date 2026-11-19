@@ -20,7 +20,7 @@
 systemd_stop_panel_units() {
     local cmd="${SYSTEMD_STOP_CMD:-systemctl}"
     local dir="${SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
-    local units="${OPS_UNIT_NAMES:-ops-terminal.service ops-terminal-gateway.service ops-terminal-nginx.service}"
+    local units="${OPS_UNIT_NAMES:-ops-terminal.service ops-terminal-gateway.service ops-terminal-nginx.service ops-terminal-front.service ops-terminal-tls-renew.service ops-terminal-tls-renew.timer}"
     local u
 
     # 1) disable + stop (a unit that is crash-looping or start-limited stops too)
@@ -52,7 +52,7 @@ systemd_stop_panel_units() {
 #   (used by the rollback for a post-condition assertion and by the battery)
 systemd_panel_units_stopped() {
     local cmd="${SYSTEMD_STOP_CMD:-systemctl}"
-    local units="${OPS_UNIT_NAMES:-ops-terminal.service ops-terminal-gateway.service ops-terminal-nginx.service}"
+    local units="${OPS_UNIT_NAMES:-ops-terminal.service ops-terminal-gateway.service ops-terminal-nginx.service ops-terminal-front.service ops-terminal-tls-renew.service ops-terminal-tls-renew.timer}"
     local u
     for u in $units; do
         # active (or activating) means NOT stopped -> failure

@@ -17,25 +17,30 @@
 #   * haproxy-tcp-passthrough   : same HAProxy cleanup (TLS block on the
 #                                 internal nginx dies with its config dir)
 #
-# Usage:  uninstall.sh [--yes] [--sandbox] [--purge]
+# Usage:  uninstall.sh [--yes] [--sandbox] [--purge] [--purge-packages]
 #                      [--haproxy-cfg PATH] [--haproxy-bin PATH]
 #                      [--haproxy-pidfile PATH]
 #   --yes     skip confirmation
 #   --sandbox remove a --sandbox test installation
 #   --purge   also remove logs, state and backups (default: kept)
+#   --purge-packages  ALSO apt-purge the distro nginx + certbot packages the
+#            standalone install brought in (default: kept — harmless on a
+#            dedicated server; this flag is opt-in because removing nginx
+#            could affect other local uses)
 # ==========================================================================
 set -Eeuo pipefail
 die()  { printf '[uninstall][FATAL] %s\n' "$*" >&2; exit 1; }
 note() { printf '[uninstall] %s\n' "$*"; }
 warn() { printf '[uninstall][WARN] %s\n' "$*"; }
 
-ASSUME_YES=0; SANDBOX=0; PURGE=0
+ASSUME_YES=0; SANDBOX=0; PURGE=0; PURGE_PACKAGES=0
 HAPROXY_CFG_ARG=""; HAPROXY_BIN_ARG=""; HAPROXY_PIDFILE_ARG=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --yes) ASSUME_YES=1; shift ;;
     --sandbox) SANDBOX=1; shift ;;
     --purge) PURGE=1; shift ;;
+    --purge-packages) PURGE_PACKAGES=1; shift ;;
     --haproxy-cfg) HAPROXY_CFG_ARG="$2"; shift 2 ;;
     --haproxy-bin) HAPROXY_BIN_ARG="$2"; shift 2 ;;
     --haproxy-pidfile) HAPROXY_PIDFILE_ARG="$2"; shift 2 ;;
@@ -72,6 +77,7 @@ else
   VARTMP_DIR="/var/tmp/ops-terminal"; RUN_DIR="/run/ops-terminal"
   VHOST_FILE="/etc/nginx/sites-available/ops-terminal.conf"
   [ -e "$VHOST_FILE" ] || VHOST_FILE="/etc/nginx/conf.d/ops-terminal.conf"
+  WEBROOT_DIR="/var/www/ops-terminal"          # CP13 standalone ACME webroot
   BACKUP_BASE="/var/backups/ops-terminal"
   HAPROXY_CFG="${HAPROXY_CFG_ARG:-/etc/haproxy/haproxy.cfg}"
   HAPROXY_BIN="${HAPROXY_BIN_ARG:-$(command -v haproxy 2>/dev/null || echo /usr/sbin/haproxy)}"
@@ -85,7 +91,7 @@ fi
 TOPOLOGY=""
 [ -r "$ETC_DIR/env" ] && TOPOLOGY="$(sed -n 's/^OPS_TOPOLOGY=//p' "$ETC_DIR/env" | head -n1)"
 case "${TOPOLOGY:-}" in
-  nginx-direct|haproxy-front|haproxy-tcp-passthrough) ;;
+  nginx-direct|haproxy-front|haproxy-tcp-passthrough|standalone) ;;
   *) TOPOLOGY="" ;;   # unknown/missing -> infer from artifacts below
 esac
 HAP_IS_OURS=0
@@ -94,11 +100,18 @@ if [ -r "$HAPROXY_CFG" ] && grep -q '^# BEGIN ops-terminal' "$HAPROXY_CFG" 2>/de
 fi
 [ -f "$CRTLIST" ] && HAP_IS_OURS=1
 if [ -z "$TOPOLOGY" ]; then
-  [ "$HAP_IS_OURS" = "1" ] && TOPOLOGY="haproxy-front" || TOPOLOGY="nginx-direct"
+  if [ "$HAP_IS_OURS" = "1" ]; then TOPOLOGY="haproxy-front"
+  elif [ -f /etc/systemd/system/ops-terminal-front.service ] || [ -d "$ETC_DIR/nginx-front" ]; then
+    TOPOLOGY="standalone"   # CP13: front unit artifacts without an env file
+  else TOPOLOGY="nginx-direct"; fi
   note "topology not recorded — inferred: $TOPOLOGY"
 fi
 
+# --purge-packages may run AFTER a successful uninstall (a package-cleanup
+# pass) — with nothing left installed it must still work, purging only the
+# distro packages and any leftover unit files.
 [ -e "$ETC_DIR/env" ] || [ -e "$OPT_DIR" ] || [ "$HAP_IS_OURS" = "1" ] \
+  || [ "$PURGE_PACKAGES" = "1" ] \
   || die "no installation found at $ETC_DIR / $OPT_DIR (and no managed HAProxy blocks)"
 
 if [ "$ASSUME_YES" != "1" ]; then
@@ -191,11 +204,33 @@ if [ "$TOPOLOGY" != "nginx-direct" ] && [ -r "$HAPROXY_CFG" ] && [ "$HAP_IS_OURS
     fi
   fi
 fi
-# ACME issuance hook for the HAProxy PEM (production only)
+# ACME issuance hooks (production only)
 if [ "$SANDBOX" != "1" ]; then
   [ -f /etc/letsencrypt/renewal-hooks/deploy/ops-terminal-haproxy.sh ] \
     && rm -f /etc/letsencrypt/renewal-hooks/deploy/ops-terminal-haproxy.sh \
-    && note "certbot renewal deploy hook removed"
+    && note "certbot renewal deploy hook removed (haproxy)"
+  [ -f /etc/letsencrypt/renewal-hooks/deploy/ops-terminal-standalone.sh ] \
+    && rm -f /etc/letsencrypt/renewal-hooks/deploy/ops-terminal-standalone.sh \
+    && note "certbot renewal deploy hook removed (standalone)"
+fi
+
+# --- 1b-standalone. CP13: only-this-project LE certificate + webroot ---------
+if [ "$TOPOLOGY" = "standalone" ] && [ "$SANDBOX" != "1" ]; then
+  DOMAIN="$(sed -n 's/^OPS_DOMAIN=//p' "$ETC_DIR/env" 2>/dev/null | head -n1)"
+  DOMAIN="${DOMAIN:-ops.hanaso.ir}"
+  if [ -d "/etc/letsencrypt/live/$DOMAIN" ] || [ -f "/etc/letsencrypt/renewal/$DOMAIN.conf" ]; then
+    if command -v certbot >/dev/null 2>&1; then
+      note "removing THIS panel's Let's Encrypt material for $DOMAIN (certbot delete)"
+      certbot delete --cert-name "$DOMAIN" --non-interactive 2>/dev/null \
+        && note "LE certificate/renewal config deleted" \
+        || warn "certbot delete failed — remove /etc/letsencrypt for $DOMAIN manually"
+    else
+      warn "certbot not installed — LE material for $DOMAIN left in place"
+    fi
+  fi
+  if [ -d "$WEBROOT_DIR" ]; then
+    rm -rf "$WEBROOT_DIR" && note "standalone ACME webroot removed: $WEBROOT_DIR"
+  fi
 fi
 
 # --- 2. kill the detached tmux server (owned by this panel only) -------------
@@ -233,18 +268,29 @@ if [ "$SANDBOX" != "1" ]; then
   rm -f /etc/systemd/system/ops-terminal.service \
         /etc/systemd/system/ops-terminal-gateway.service \
         /etc/systemd/system/ops-terminal-nginx.service \
+        /etc/systemd/system/ops-terminal-front.service \
+        /etc/systemd/system/ops-terminal-tls-renew.service \
+        /etc/systemd/system/ops-terminal-tls-renew.timer \
         /etc/logrotate.d/ops-terminal \
         /usr/local/bin/ops-terminal-passwd
   systemctl daemon-reload 2>/dev/null || true
   if id ops-gw >/dev/null 2>&1; then
     userdel ops-gw 2>/dev/null && note "system user ops-gw removed" || note "ops-gw still has processes/files elsewhere — not removed"
   fi
+  if [ "$PURGE_PACKAGES" = "1" ]; then
+    note "--purge-packages: apt-purging the distro nginx + certbot packages (standalone install brought them in)"
+    DEBIAN_FRONTEND=noninteractive apt-get purge -y nginx nginx-common nginx-core certbot 2>/dev/null \
+      && note "packages purged" || warn "apt purge reported problems — check package state"
+    DEBIAN_FRONTEND=noninteractive apt-get autoremove -y 2>/dev/null || true
+  else
+    note "distro packages (nginx, certbot) kept — pass --purge-packages to remove them"
+  fi
 fi
 
 # --- 5. remove files ------------------------------------------------------------
 note "removing $OPT_DIR"
 rm -rf "$OPT_DIR"
-note "removing $ETC_DIR (credentials + internal nginx config included)"
+note "removing $ETC_DIR (credentials + internal/front nginx config included)"
 rm -rf "$ETC_DIR"
 rm -rf "$VARLIB_DIR" "$RUN_DIR"
 if [ "$PURGE" = "1" ]; then
