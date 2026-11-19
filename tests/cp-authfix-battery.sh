@@ -98,8 +98,8 @@ reset_apt_fresh() {
   rm -rf /etc/ops-terminal /opt/ops-terminal /var/lib/ops-terminal /var/log/ops-terminal \
          /var/tmp/ops-terminal /run/ops-terminal /var/www/ops-terminal /var/backups/ops-terminal \
          /etc/letsencrypt /usr/local/bin/ops-terminal-passwd /etc/logrotate.d/ops-terminal
-  rm -f /etc/systemd/system/ops-terminal-* /etc/apt/sources.list.d/00-hanaso-mirror.* \
-        /etc/apt/sources.list.d/*.disabled-by-ops-terminal /root/cp13-pw.txt
+  rm -f /etc/systemd/system/ops-terminal-* /root/cp13-pw.txt
+  rm -rf /etc/apt/sources.list.d; mkdir -p /etc/apt/sources.list.d
   printf 'deb [trusted=yes] file:/opt/mirror ./\n' > /etc/apt/sources.list
   rm -rf /var/lib/apt/lists/*; mkdir -p /var/lib/apt/lists/partial
   apt-get update >>"$LOGDIR/purge.log" 2>&1 || true
@@ -322,6 +322,7 @@ EOF
   sha_after_rb="$(sha256sum /etc/apt/sources.list.d/third-party-extra.list 2>/dev/null | awk '{print $1}')"
   chk_eq "A4-3-thirdparty-untouched-rollback" "$sha_before" "$sha_after_rb"
   stop_mirrors
+  rm -f /etc/apt/sources.list.d/third-party-extra.list /root/a2-orig-ref.sources
   ;;
 
 A5) # ---- fail-closed negative control: broken binary ----------------------
