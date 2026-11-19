@@ -126,3 +126,43 @@ Ubuntu 255 راستی‌آزمایی و تراکنش‌ها با supervisor وف
 
 جمع کل: **۱۱۳ PASS / ۰ FAIL (باتری) + ۸ PASS / ۰ FAIL (مرورگر)** — شامل رفع یک باگ واقعی کشف‌شده
 توسط همین مرورگر (front باید با `$http_host` پورت را حفظ کند — ttyd با `-O` origin را با پورت مقایسه می‌کند).
+
+---
+
+# CP15 / v1.3.2 — رفع false-negative تست زنده auth_request + پاک‌سازی Backup منابع APT
+
+> تاریخ: 2026-11-19 — بازتولید تجربی ریشه حادثه با باینری production-class (nginx/1.24.0 Ubuntu، `--with-http_auth_request_module`) و سپس رفع + بازتولید تست.
+
+## بازتولید تجربی ریشه (negative control با باینری production)
+
+| آزمون | DENY (انتظار 401) | ALLOW (انتظار 200) | نتیجه |
+|-------|-------------------|--------------------|--------|
+| محتوا ناخوانا برای worker (EACCES — دقیقاً شرایط VPS واقعی: docroot موقت 700 مالک root در برابر worker با privilege-drop) | **401** ✓ | **403** ✗ | false-negative بازتولید شد — همان پیام Production: `open() ... failed (13: Permission denied)` در error.log |
+| محتوا خوانا (fix: 0755/0644) | **401** ✓ | **200** ✓ + `AUTHREQ-LIVE-OK` | auth_request کاملاً سالم است — مشکل از هارنس تست بود، نه ماژول |
+
+ریشه: `mktemp -d` دایرکتوری موقت را 700 می‌سازد؛ در نصب واقعی root، nginx worker به کاربر توزیع منتقل می‌شود (نoble nginx بدون `--user` کامپایل شده) و غیرمالک، از دایرکتوری 700 عبور نمی‌کند. باتری قبلی این را نمی‌دید چون rootfs فیکسچر VM، `www-data`/`nobody` را uid 0 می‌بیند (آرتیفکت userns).
+
+## باتری اختصاصی جدید (tests/cp-authfix-battery.sh — داخل VM واقعی Ubuntu 24.04)
+
+| سناریو | شرح | نتیجه |
+|--------|-----|-------|
+| A0 | sanity باینری توزیع (nginx/1.24.0 Ubuntu + Built-in flag) و نبود هرگونه `load_module`/`libnginx-mod`/`*.so` در مخزن | 7 PASS / 0 FAIL |
+| A1 | `verify_auth_request_live` روی `/usr/sbin/nginx` واقعی در context نصب root (VM) + تمیزی کامل (بدون leftover موقت، بدون listener باقی‌مانده، پورت‌های فقط-loopback) + ورود خط LIVE PASS به لاگ نصب و گزارش بایگانی | 10 PASS / 0 FAIL |
+| A2 | deb822: انتقال `ubuntu.sources` به Backup خارج از `sources.list.d` + نبود هشدار `Ignoring file` + Rollback بایت‌به‌بایت (`cmp` تأیید) | 14 PASS / 0 FAIL |
+| A3 | sweep بقایای legacy — دقیقاً آرتیفکت Production (`ubuntu.sources.disabled-by-ops-terminal` در sources.list.d): انتقال به `disabled/legacy/`، لاگ sweep، هشدار دیگر ظاهر نمی‌شود، rollback آن را زنده نمی‌کند | 9 PASS / 0 FAIL |
+| A4 | مخزن third-party با URI غیر-Ubuntu: پس از apply و پس از rollback بایت‌به‌بایت دست‌نخورده و فعال | 5 PASS / 0 FAIL |
+| A5 | کنترل منفی fail-closed: باینری خراب → تست با reason دقیق FAIL می‌شود؛ کانفیگ با directive نامعلوم توسط `nginx -t` رد می‌شود | 3 PASS / 0 FAIL |
+
+## رگرسیون‌های کامل
+
+| باتری | نتیجه |
+|-------|-------|
+| CP14 — Mirror Discovery/Fallback (M1..M8, MA؛ سناریوی deb822 با ادعاهای جدید v1.3.2) | **75 PASS / 0 FAIL** |
+| CP13 — نصب کامل standalone (A 56 / B 27 / C 8 / D 11 / E 12) | **114 PASS / 0 FAIL** |
+| مرورگر واقعی (Playwright/Chromium → TLS واقعی → auth_request → Gateway → ttyd → root shell) | **8 PASS / 0 FAIL** |
+
+**جمع CP15: 48 (باتری جدید) + 75 + 114 = 237 PASS / 0 FAIL + مرورگر 8/8.**
+
+نتایج LIVE ثبت‌شده در لاگ نصب واقعی VM: `auth_request LIVE test: PASS (subrequest 401 -> denied/401, subrequest 200 -> allowed/200 + protected content served)` + `auth_request module: BUILT-IN (--with-http_auth_request_module in /usr/sbin/nginx -V)`.
+
+انتشار: commit `1cc6e7c1b334f84454366ef6ccb74bc7f037c451`، تگ annotated `v1.3.2` (شیء تگ `0824e9fbda9ea332784cb9913f059952491f27bf`) — روی GitHub تأیید شد؛ کلون تازه تگ، مانیفست SHA256SUMS را کامل تأیید کرد (ALL FILES VERIFIED OK) و URL خام تگ‌دار دقیقاً همان فایل را سرو می‌کند.
