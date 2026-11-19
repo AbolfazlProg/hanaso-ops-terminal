@@ -586,32 +586,39 @@ apt_mirror_engine() {
       printf 'deb %s %s\n' "$c_u" "${c_suite:-$suite}" > "$probe_list"
     fi
     mkdir -p "$probe_lists/partial"
+    local uprc=1
     if timeout "$APT_UPDATE_TIMEOUT" apt-get update \
          -o Dir::Etc::sourcelist="$probe_list" \
          -o Dir::Etc::sourceparts=/dev/null \
          -o Dir::State::lists="$probe_lists" \
          > "$logf" 2>&1; then
-      if _apt_all_candidates_ok "${want[@]}" \
-           -o Dir::State::lists="$probe_lists" \
-           -o Dir::Etc::sourcelist="$probe_list" \
-           -o Dir::Etc::sourceparts=/dev/null; then
-        dur=$(( $(date +%s) - start ))
-        _amr "TEST $c_u -> PASS (apt-get update OK in ${dur}s, signatures verified by apt-secure, all ${#want[@]} package(s) present)"
-        cand_ver="$(_apt_candidates_line "${want[@]}" \
-                      -o Dir::State::lists="$probe_lists" \
-                      -o Dir::Etc::sourcelist="$probe_list" \
-                      -o Dir::Etc::sourceparts=/dev/null)"
-        _amr "candidates($c_u): $cand_ver"
-        sel="$c_u"; sel_suite="${c_suite:-$suite}"; sel_comps="${c_comps:-$comps_probe}"
-        rm -f "$logf" "$probe_list"; rm -rf "$probe_lists"
-        break
-      fi
-      reason="apt-get update OK but package candidate(s) MISSING/INCOMPLETE: $(_apt_candidates_line "${want[@]}" -o Dir::State::lists="$probe_lists" -o Dir::Etc::sourcelist="$probe_list" -o Dir::Etc::sourceparts=/dev/null 2>/dev/null || echo '?')"
-      _amr "TEST $c_u -> REJECT reason=$reason"
+      uprc=0
     else
-      reason="apt-get update failed after signature/candidate validation attempt: $(_apt_update_reason "$logf")"
-      _amr "TEST $c_u -> REJECT reason=$reason"
+      uprc=$?
     fi
+    # the update exit code is NOT a proof (the v1.3.0 incident: rc=0 with a
+    # broken mirror; and file: transport reports a missing optional Release
+    # with rc!=0 while the Packages index is perfectly usable). The REAL apt
+    # verdict is the freshly fetched index: do the wanted packages have
+    # candidates FROM THIS MIRROR? (apt-secure signature enforcement happens
+    # inside the update itself — unauthenticated indexes are refused by apt.)
+    if _apt_all_candidates_ok "${want[@]}" \
+         -o Dir::State::lists="$probe_lists" \
+         -o Dir::Etc::sourcelist="$probe_list" \
+         -o Dir::Etc::sourceparts=/dev/null; then
+      dur=$(( $(date +%s) - start ))
+      _amr "TEST $c_u -> PASS (apt-get update rc=$uprc, ${dur}s; signatures enforced by apt-secure; all ${#want[@]} package(s) present)"
+      cand_ver="$(_apt_candidates_line "${want[@]}" \
+                    -o Dir::State::lists="$probe_lists" \
+                    -o Dir::Etc::sourcelist="$probe_list" \
+                    -o Dir::Etc::sourceparts=/dev/null)"
+      _amr "candidates($c_u): $cand_ver"
+      sel="$c_u"; sel_suite="${c_suite:-$suite}"; sel_comps="${c_comps:-$comps_probe}"
+      rm -f "$logf" "$probe_list"; rm -rf "$probe_lists"
+      break
+    fi
+    reason="apt-get update rc=$uprc — index unusable/missing candidates for this mirror ($(_apt_candidates_line "${want[@]}" -o Dir::State::lists="$probe_lists" -o Dir::Etc::sourcelist="$probe_list" -o Dir::Etc::sourceparts=/dev/null 2>/dev/null || echo '?')): $(_apt_update_reason "$logf")"
+    _amr "TEST $c_u -> REJECT reason=$reason"
     rm -f "$logf" "$probe_list"; rm -rf "$probe_lists"
   done
 
