@@ -868,6 +868,8 @@ fi
 
 # --- convenience tools + logrotate (production)
 if [ "$SANDBOX" != "1" ]; then
+  # minimal/cloud images may lack /usr/local/bin entirely — create it first
+  mkdir -p /usr/local/bin
   sed "s|/opt/ops-terminal|$OPT_DIR|g" "$REPO_DIR/scripts/ops-terminal-passwd" \
       > /usr/local/bin/ops-terminal-passwd
   chmod 0755 /usr/local/bin/ops-terminal-passwd
