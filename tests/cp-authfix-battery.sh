@@ -196,15 +196,16 @@ A0) # ---- environment sanity: built-in module, no dynamic-module refs ----
   ;;
 
 A1) # ---- REAL auth_request proof with the REAL distro nginx (root ctx) ----
-  step A1-0 "fresh VM state"
+  step A1-0 "fresh VM state + distro nginx available"
   reset_apt_fresh
+  DEBIAN_FRONTEND=noninteractive apt-get install -y nginx >>"$LOGDIR/A1-install.log" 2>&1 || true
   step A1-1 "verify_auth_request_live on /usr/sbin/nginx (root install context)"
   assert "A1-1-live-test-PASS" bash -c "source '$REPO/scripts/ops-apt-mirror.sh' && verify_auth_request_live /usr/sbin/nginx"
   assert "A1-1-reason-empty-on-success" bash -c "source '$REPO/scripts/ops-apt-mirror.sh' && verify_auth_request_live /usr/sbin/nginx && [ -z \"\$_ARL_REASON\" ]"
   step A1-2 "the probe is loopback-only, throwaway and leak-free"
   assert "A1-2-conf-loopback-only" bash -c "grep -q 'listen 127.0.0.1:' '$REPO/scripts/ops-apt-mirror.sh' && ! grep -qE 'listen (0\.0\.0\.0|\[::\]|80|443)[^0-9]' '$REPO/scripts/ops-apt-mirror.sh'"
   assert "A1-2-no-temp-leftovers" bash -c '! ls -d /tmp/ops-authreq.* 2>/dev/null | grep -q . || { sleep 1; ! ls -d /tmp/ops-authreq.* 2>/dev/null | grep -q .; }'
-  assert "A1-2-no-stray-nginx" bash -c '! pgrep -f "ops-authreq" | grep -q . || { sleep 1; ! pgrep -f "ops-authreq" | grep -q .; }'
+  assert "A1-2-no-stray-listener" bash -c 'sleep 1; ! ss -tln 2>/dev/null | awk "{print \$4}" | grep -qE ":(17691|17692|27691|27692|37691|37692)$"'
   assert "A1-2-docroot-readable-mode" bash -c "source '$REPO/scripts/ops-apt-mirror.sh'; t=\$(mktemp -d /tmp/ops-arl-perm.XXXXXX); chmod 0755 \$t; mkdir -p \$t/h; printf 'AUTHREQ-LIVE-OK\n' > \$t/h/p; chmod 0644 \$t/h/p; grep -q 0755 <(stat -c '%a' \$t) && grep -q 644 <(stat -c '%a' \$t/h/p); rm -rf \$t"
   step A1-3 "installer-level integration: the LIVE line lands in the install log"
   setup_acme_stub; install_test_key; start_mirrors
@@ -213,7 +214,8 @@ A1) # ---- REAL auth_request proof with the REAL distro nginx (root ctx) ----
   assert "A1-3-installer-rc" test "$RC" = "0"
   assert "A1-3-live-pass-in-log" grep -q "auth_request LIVE test: PASS" "$LOGDIR/A1-install.log"
   assert "A1-3-builtin-note-in-log" grep -q "auth_request module: BUILT-IN" "$LOGDIR/A1-install.log"
-  assert "A1-3-report-live-line" bash -c 'test -f "$(latest_backup_dir)/apt-mirror-report.txt" && grep -q "auth_request LIVE: PASS" "$(latest_backup_dir)/apt-mirror-report.txt"'
+  BD="$(latest_backup_dir)"
+  assert "A1-3-report-live-line" bash -c "test -f '$BD/apt-mirror-report.txt' && grep -q 'auth_request LIVE: PASS' '$BD/apt-mirror-report.txt'"
   stop_mirrors
   ;;
 
