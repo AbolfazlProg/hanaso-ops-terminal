@@ -580,7 +580,11 @@ apt_mirror_engine() {
     local probe_list probe_lists
     probe_list="$(mktemp /tmp/ops-aptlist.XXXXXX)"
     probe_lists="$(mktemp -d /tmp/ops-aptlists.XXXXXX)"
-    printf 'deb %s %s %s\n' "$c_u" "${c_suite:-$suite}" "${c_comps:-$comps_probe}" > "$probe_list"
+    if [ -n "${c_comps:-}" ]; then
+      printf 'deb %s %s %s\n' "$c_u" "${c_suite:-$suite}" "$c_comps" > "$probe_list"
+    else
+      printf 'deb %s %s\n' "$c_u" "${c_suite:-$suite}" > "$probe_list"
+    fi
     mkdir -p "$probe_lists/partial"
     if timeout "$APT_UPDATE_TIMEOUT" apt-get update \
          -o Dir::Etc::sourcelist="$probe_list" \
