@@ -466,20 +466,29 @@ EOM
       && note "distro nginx.service disabled — the panel unit ops-terminal-front.service owns :80/:443" || true
     DIST_NGINX_DISABLED=1
   fi
-  # --- HARD verification: the binary MUST have auth_request (fail-closed)
+  # --- HARD verification: the binary MUST have auth_request (fail-closed).
+  # CP v1.3.2: auth_request on the distro nginx is a BUILT-IN (static) module
+  # — detected from `nginx -V` (--with-http_auth_request_module). When built-in:
+  # NO load_module is ever generated, NO .so is required, NO extra package
+  # (libnginx-mod-*) is installed. Dynamic-module handling is out of scope
+  # (fail-closed) because the distro package always ships the module built-in.
   NGX_BIN_PROD="$(command -v nginx || echo /usr/sbin/nginx)"
   [ -x "$NGX_BIN_PROD" ] || die "standalone: nginx binary not found after dependency install"
   "$NGX_BIN_PROD" -V 2>&1 | tr ' ' '\n' | grep -q -- --with-http_auth_request_module \
     || die "standalone: installed nginx STILL lacks http_auth_request_module ($NGX_BIN_PROD) — refusing to continue (fail-closed)"
-  # CP v1.3.1: REAL functional auth_request proof (not just a compile flag):
-  # a throwaway nginx serves /protected behind auth_request — the subrequest
-  # stub returning 401 must DENY, the stub returning 200 must ALLOW.
+  note "auth_request module: BUILT-IN (--with-http_auth_request_module in $NGX_BIN_PROD -V) — no load_module, no .so, no extra package involved"
+  # CP v1.3.1 + v1.3.2: REAL functional auth_request proof (not just a compile
+  # flag): a throwaway nginx serves /protected behind auth_request — the
+  # subrequest stub returning 401 must DENY, the stub returning 200 must ALLOW
+  # and the protected content must REALLY be served (v1.3.2 false-negative fix:
+  # the probe docroot is 0755/0644 so a privilege-dropped worker can read it;
+  # failures carry a precise diagnosis in _ARL_REASON).
   if verify_auth_request_live "$NGX_BIN_PROD"; then
-    note "auth_request LIVE test: PASS (subrequest 401 -> denied, subrequest 200 -> allowed)"
-    _amr "auth_request LIVE: PASS (401-stub denies, 200-stub allows) on a throwaway nginx instance"
+    note "auth_request LIVE test: PASS (subrequest 401 -> denied/401, subrequest 200 -> allowed/200 + protected content served)"
+    _amr "auth_request LIVE: PASS (401-stub denies, 200-stub allows + content proof) on a throwaway nginx instance"
     _apt_mirror_save_report   # include the auth_request line in the archived report
   else
-    die "standalone: auth_request LIVE test FAILED ($NGX_BIN_PROD) — the module does not answer correctly; refusing to continue (fail-closed)"
+    die "standalone: auth_request LIVE test FAILED ($NGX_BIN_PROD) — ${_ARL_REASON:-unknown reason}; refusing to continue (fail-closed)"
   fi
   # D24: record the REAL binary identity in the install log
   note "nginx binary identity: $($NGX_BIN_PROD -V 2>&1 | head -1) [$($NGX_BIN_PROD -V 2>&1 | tail -1 | grep -oE 'error-log-path=[^ ]+' || echo 'error-log-path=(default)')]"

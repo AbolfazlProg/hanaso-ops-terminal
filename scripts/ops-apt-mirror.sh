@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==========================================================================
-# HANASO OPS Web Terminal — APT Mirror Discovery & Fallback Engine (CP, v1.3.1)
+# HANASO OPS Web Terminal — APT Mirror Discovery & Fallback Engine (CP, v1.3.2)
 #
 # Production incident (v1.3.0, fresh Ubuntu 24.04 VPS):
 #   E: Unable to locate package nginx
@@ -311,27 +311,62 @@ _apt_discover_candidates() { # fills APT_MIRROR_CANDIDATES (triples uri|suite|co
 }
 
 # -------------------------------------------------------------- apply stage --
+# CP v1.3.2: a deb822 file that the engine disables is MOVED OUT of
+# /etc/apt/sources.list.d (into the engine backup dir) instead of being
+# renamed in place with an invalid suffix. apt IGNORES files with unknown
+# suffixes in sources.list.d and printed
+#   "N: Ignoring file 'ubuntu.sources.disabled-by-ops-terminal' ..."
+# for the whole install/rollback (real production warning, 2026-11-19).
+# Files outside sources.list.d never trigger that warning.
+APT_DEB822_DISABLED=0
 apt_mirror_rollback_sources() {
   # Called by the installer's rollback(): restores the pre-engine apt sources.
   [ "$APT_SOURCES_TOUCHED" = "1" ] || return 0
   local bd="${BACKUP_DIR:-}/apt-backup"
   [ -d "$bd" ] || return 0
   printf '[install][ROLLBACK] restoring apt sources from %s\n' "$bd" >&2
+  # 1) the deb822 originals that were MOVED OUT of sources.list.d: mv back
+  #    EXACTLY as they were (same bytes, same name, same location)
+  if [ -d "$bd/disabled" ]; then
+    local f
+    for f in "$bd/disabled"/*.sources; do
+      [ -f "$f" ] || continue
+      mv "$f" "/etc/apt/sources.list.d/$(basename "$f")"
+    done
+    # NOTE: legacy leftovers under disabled/legacy/ (invalid-suffix files
+    # from PREVIOUS runs) are deliberately NOT re-activated — restoring
+    # them would re-create the 'N: Ignoring file ...' warning. They remain
+    # preserved in the backup dir.
+  fi
+  # 2) exact copies of everything that was in sources.list.d before the run
   if [ -f "$bd/sources.list" ]; then cp -a "$bd/sources.list" /etc/apt/sources.list; fi
   if [ -d "$bd/sources.list.d" ]; then
     local f
     while IFS= read -r f; do
-      local base; base="$(basename "$f")"
-      case "$base" in
-        *.disabled-by-ops-terminal)
-          mv "$bd/sources.list.d/$base" "/etc/apt/sources.list.d/${base%.disabled-by-ops-terminal}" ;;
-        *) cp -a "$bd/sources.list.d/$base" "/etc/apt/sources.list.d/$base" 2>/dev/null ;;
-      esac
+      cp -a "$f" "/etc/apt/sources.list.d/$(basename "$f")" 2>/dev/null
     done < <(ls -A "$bd/sources.list.d" 2>/dev/null)
   fi
   rm -f /etc/apt/sources.list.d/00-hanaso-mirror.sources /etc/apt/sources.list.d/00-hanaso-mirror.list
   timeout "$APT_UPDATE_TIMEOUT" apt-get update >/dev/null 2>&1 || true
   APT_SOURCES_TOUCHED=0
+}
+
+# CP v1.3.2: sweep leftovers of older installer runs. A file named
+# '*.disabled-by-ops-terminal' inside sources.list.d is INVALID for apt
+# (unknown suffix) and keeps the 'Ignoring file' warning alive forever.
+# Relocate it into the CURRENT run's backup dir — preserved, but out of
+# apt's sight; never re-activated (the engine decides sources from scratch).
+_apt_sweep_legacy_disabled() {
+  local bd="${BACKUP_DIR:-}/apt-backup" f n=0
+  [ -d /etc/apt/sources.list.d ] || return 0
+  for f in /etc/apt/sources.list.d/*.disabled-by-ops-terminal; do
+    [ -f "$f" ] || continue
+    mkdir -p "$bd/disabled/legacy"
+    mv "$f" "$bd/disabled/legacy/$(basename "$f")"
+    n=$((n+1))
+  done
+  [ "$n" -gt 0 ] && _amr "legacy cleanup: relocated $n invalid-suffix file(s) (*.disabled-by-ops-terminal) out of /etc/apt/sources.list.d into $bd/disabled/legacy — the 'N: Ignoring file ...' warning will not reappear; originals preserved"
+  return 0
 }
 
 _apt_apply_selected() { # <uri> <suite> <comps> -> 0 on success
@@ -389,23 +424,29 @@ _apt_apply_selected() { # <uri> <suite> <comps> -> 0 on success
     fi
   done
 
-  # deb822 files: disable whole file ONLY if it carries Ubuntu-archive URIs
+  # deb822 files: disable whole file ONLY if it carries Ubuntu-archive URIs.
+  # CP v1.3.2: the original is MOVED OUT of sources.list.d into the engine
+  # backup dir ("disabled/") — NOT renamed in place: an invalid suffix inside
+  # sources.list.d makes apt print "N: Ignoring file '...'" for every
+  # operation (real production warning). The original stays byte-identical
+  # and rollback mv's it back exactly.
+  APT_DEB822_DISABLED=0
+  local style="list"
   for f in /etc/apt/sources.list.d/*.sources; do
     [ -f "$f" ] || continue
     if grep -qiE "(archive\.ubuntu\.com|security\.ubuntu\.com${APT_UBUNTU_GREP_ALT})" "$f" || grep -qiE '^URIs:.*(file:|copy:)' "$f"; then
-      mv "$f" "$f.disabled-by-ops-terminal"
+      mkdir -p "$bd/disabled"
+      mv "$f" "$bd/disabled/$(basename "$f")"
+      APT_DEB822_DISABLED=1
+      style="deb822"
     fi
   done
-
-  # ---- write the selected mirror (deb822 when the system used deb822) ----
-  local style="list"
-  if ls /etc/apt/sources.list.d/*.sources.disabled-by-ops-terminal >/dev/null 2>&1; then style="deb822"; fi
   if [ "$style" = "deb822" ]; then
     cat > /etc/apt/sources.list.d/00-hanaso-mirror.sources <<EOF
-## Managed by hanaso-ops-terminal v1.3.1 APT mirror engine.
+## Managed by hanaso-ops-terminal v1.3.2 APT mirror engine.
 ## Selected after a REAL apt validation (isolated apt-get update with full
 ## apt-secure signature enforcement + package candidate check).
-## Original sources backed up in: $bd
+## Original sources backed up in: $bd (deb822 originals: $bd/disabled/)
 Types: deb
 URIs: $uri
 Suites: $suite $suite-updates $suite-backports $suite-security
@@ -415,7 +456,7 @@ Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 EOF
   else
     cat > /etc/apt/sources.list.d/00-hanaso-mirror.list <<EOF
-## Managed by hanaso-ops-terminal v1.3.1 APT mirror engine.
+## Managed by hanaso-ops-terminal v1.3.2 APT mirror engine.
 ## Selected after a REAL apt validation (isolated apt-get update with full
 ## apt-secure signature enforcement + package candidate check).
 ## Original sources backed up in: $bd
@@ -429,22 +470,81 @@ EOF
 }
 
 # ----------------------------------------------------------- live checks --
+# CP v1.3.2 (false-negative fix, 2026-11-19 production incident):
+#
+# The previous LIVE test built its throwaway docroot with `mktemp -d` (mode
+# 0700, owned by root because the installer runs as root). A REAL root install
+# drops the nginx worker privileges to the distro default user (www-data or
+# nobody — NOT the owner of the docroot), which cannot TRAVERSE a 0700 dir:
+# the static content phase answers 403 instead of 200 on the ALLOW path and
+# the whole test reported "the module does not answer correctly" although
+# auth_request itself worked perfectly. Empirically reproduced with the exact
+# production binary (nginx/1.24.0 Ubuntu, --with-http_auth_request_module):
+# DENY 401 ok, ALLOW 403 (open() -> EACCES -> 403) => false negative.
+# The sandbox/VM battery never saw it because its fixture rootfs maps
+# www-data/nobody to uid 0 (userns artifact) — the worker stayed root and
+# could read everything. Fix: docroot 0755 + file 0644 (correct for ANY
+# worker identity), body-content proof, wget/dev-tcp fallbacks and precise
+# per-step diagnostics (_ARL_REASON) surfaced by the installer on failure.
+_ARL_REASON=""
+_arl_port_busy() { # <port> -> 0 when something already listens on 127.0.0.1:<port>
+  if command -v ss >/dev/null 2>&1; then
+    ss -tln 2>/dev/null | awk '{print $4}' | grep -qE ":$1\$" && return 0
+    return 1
+  fi
+  # minimal images may lack ss: a successful TCP connect means the port is busy
+  (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && { exec 3>&- 3<&- 2>/dev/null; return 0; }
+  return 1
+}
+_arl_fetch() { # <port> <path> <body-file> [timeout] -> prints status (body -> file;
+  #              NOTE: the body travels via the FILE because this function is
+  #              called inside a command substitution — shell globals set here
+  #              would not survive the subshell, which broke the caller under
+  #              `set -u` in the v1.3.2 draft)
+  local port="$1" path="$2" bfw="$3" t="${4:-2}" c=""
+  : > "$bfw"
+  if command -v curl >/dev/null 2>&1; then
+    c="$(curl -s -m "$t" -o "$bfw" -w '%{http_code}' "http://127.0.0.1:$port$path" 2>/dev/null || true)"
+    [ "$c" = "000" ] && c=""
+  elif command -v wget >/dev/null 2>&1; then
+    c="$(wget -q -S -T "$t" -O "$bfw" "http://127.0.0.1:$port$path" 2>&1 | awk 'NR==1{print $2}')" || true
+    [ "$c" = "000" ] && c=""
+  else
+    # last-resort pure-bash probe (status line only; body check skipped)
+    local line
+    line="$( { printf 'GET %s HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n' "$path" \
+      | timeout "$t" bash -c "exec 3<>/dev/tcp/127.0.0.1/$port; cat >&3; head -1 <&3" 2>/dev/null; } || true)"
+    c="$(printf '%s' "$line" | awk '{print $2}')"
+    : > "$bfw"
+  fi
+  printf '%s' "$c"
+}
 verify_auth_request_live() { # <nginx-binary> -> REAL functional proof
-  local ngx="$1" base try_ok=0 tmp conf p1 p2
+  local ngx="$1" base try_ok=0 tmp conf p1 p2 logtail
+  _ARL_REASON=""
   for base in 17691 27691 37691; do
     p1="$base"; p2=$((base+1))
-    ss -tln 2>/dev/null | awk '{print $4}' | grep -qE ":$p1$" && continue
-    ss -tln 2>/dev/null | awk '{print $4}' | grep -qE ":$p2$" && continue
+    _arl_port_busy "$p1" && continue
+    _arl_port_busy "$p2" && continue
     try_ok=1; break
   done
-  [ "$try_ok" = "1" ] || return 1
-  tmp="$(mktemp -d /tmp/ops-authreq.XXXXXX)" || return 1
-  conf="$tmp/test.conf"
+  if [ "$try_ok" != "1" ]; then
+    _ARL_REASON="no free loopback port pair (17691/27691/37691 ±1 all busy)"
+    return 1
+  fi
+  tmp="$(mktemp -d /tmp/ops-authreq.XXXXXX)" || { _ARL_REASON="mktemp failed"; return 1; }
+  # FALSE-NEGATIVE FIX (the heart of v1.3.2): mktemp -d makes a 0700 dir; a
+  # privilege-dropped worker could never traverse it. 0755/0644 is safe here:
+  # the served file contains no secret and lives only for this probe.
+  chmod 0755 "$tmp" 2>/dev/null || true
+  mkdir -p "$tmp/htdocs"
+  chmod 0755 "$tmp/htdocs"
   # the protected location must do REAL content-phase work (a static file):
   # 'return' runs in the rewrite phase BEFORE the access phase and would make
   # auth_request a no-op (401-stub would wrongly answer 200).
-  mkdir -p "$tmp/htdocs"
   printf 'AUTHREQ-LIVE-OK\n' > "$tmp/htdocs/protected"
+  chmod 0644 "$tmp/htdocs/protected"
+  conf="$tmp/test.conf"
   cat > "$conf" <<EOF
 pid $tmp/nginx.pid;
 error_log $tmp/error.log error;
@@ -452,6 +552,13 @@ worker_processes 1;
 events { worker_connections 16; }
 http {
   access_log off;
+  # fully self-contained: override the compiled-in temp paths so the probe
+  # works in ANY environment (minimal images, containers, unprivileged runs)
+  client_body_temp_path $tmp/cbody;
+  proxy_temp_path $tmp/proxy;
+  fastcgi_temp_path $tmp/fcgi;
+  uwsgi_temp_path $tmp/uwsgi;
+  scgi_temp_path $tmp/scgi;
   server {
     listen 127.0.0.1:$p1;
     location = /_auth { return 401; }
@@ -465,19 +572,56 @@ http {
 }
 EOF
   # if the module were missing, THIS nginx -t fails ("unknown directive")
-  "$ngx" -t -c "$conf" -p "$tmp" >/dev/null 2>&1 || { rm -rf "$tmp"; return 1; }
-  "$ngx" -c "$conf" -p "$tmp" >/dev/null 2>&1 || { rm -rf "$tmp"; return 1; }
-  local ok=1 c1 c2
-  for _ in 1 2 3 4 5; do
-    c1="$(curl -s -m 2 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$p1/protected" 2>/dev/null || true)"
+  local tlog="$tmp/t.log"
+  if ! "$ngx" -t -c "$conf" -p "$tmp" >"$tlog" 2>&1; then
+    logtail="$(tail -c 300 "$tlog" 2>/dev/null | tr '\n' ' ')"
+    rm -rf "$tmp"
+    _ARL_REASON="nginx -t failed on the throwaway config${logtail:+ — $logtail}"
+    return 1
+  fi
+  if ! "$ngx" -c "$conf" -p "$tmp" >/dev/null 2>&1; then
+    logtail="$(tail -c 300 "$tmp/error.log" 2>/dev/null | tr '\n' ' ')"
+    rm -rf "$tmp"
+    _ARL_REASON="nginx did not start${logtail:+ — $logtail}"
+    return 1
+  fi
+  local ok=1 c1="" c2="" b2="" bfw="$tmp/body.out"
+  : > "$bfw"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    c1="$(_arl_fetch "$p1" "/protected" "$bfw")"
     [ "$c1" = "401" ] && break
     sleep 0.3
   done
-  c1="$(curl -s -m 2 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$p1/protected" 2>/dev/null || true)"
-  c2="$(curl -s -m 2 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$p2/protected" 2>/dev/null || true)"
-  [ "$c1" = "401" ] || ok=0
-  [ "$c2" = "200" ] || ok=0
+  c2="$(_arl_fetch "$p2" "/protected" "$bfw")"
+  b2="$(head -c 256 "$bfw" 2>/dev/null | tr -d '\r')"
   "$ngx" -c "$conf" -p "$tmp" -s quit >/dev/null 2>&1 || true
+  # wait for a graceful master exit BEFORE deleting the tree (an rm -rf race
+  # with a still-shutting-down master can leave the temp dir behind)
+  local _w _pid
+  for _w in 1 2 3 4 5 6 7 8 9 10; do
+    _pid="$(cat "$tmp/nginx.pid" 2>/dev/null || true)"
+    [ -n "$_pid" ] && kill -0 "$_pid" 2>/dev/null || break
+    sleep 0.2
+  done
+  if [ "$c1" != "401" ]; then
+    ok=0
+    _ARL_REASON="DENY path: expected 401, got '${c1:-none}'"
+  fi
+  if [ "$c2" != "200" ]; then
+    ok=0
+    if [ "$c2" = "403" ]; then
+      _ARL_REASON="${_ARL_REASON:+$_ARL_REASON; }ALLOW path: 403 — worker could not read the probe docroot (permission problem of the test harness/worker identity, NOT a missing module; this exact false negative is what v1.3.2 fixes)"
+    else
+      _ARL_REASON="${_ARL_REASON:+$_ARL_REASON; }ALLOW path: expected 200, got '${c2:-none}'"
+    fi
+  elif ! printf '%s' "$b2" | grep -q 'AUTHREQ-LIVE-OK'; then
+    ok=0
+    _ARL_REASON="${_ARL_REASON:+$_ARL_REASON; }ALLOW path: status 200 but protected content NOT served (body mismatch)"
+  fi
+  if [ "$ok" != "1" ]; then
+    logtail="$(tail -c 300 "$tmp/error.log" 2>/dev/null | tr '\n' ' ')"
+    [ -n "$logtail" ] && _ARL_REASON="$_ARL_REASON — error.log: $logtail"
+  fi
   rm -rf "$tmp"
   [ "$ok" = "1" ] || return 1
   return 0
@@ -516,6 +660,11 @@ apt_mirror_engine() {
   _amr "================ APT MIRROR REPORT ================"
   _amr "codename=$codename arch=$arch packages=${want[*]}"
   _amr "policy: mirrors judged by REAL apt success only (InRelease fetch + isolated apt-get update with apt-secure signature enforcement + package candidate check)"
+
+  # CP v1.3.2: relocate invalid-suffix leftovers of older runs (e.g. the
+  # production 'ubuntu.sources.disabled-by-ops-terminal' warning) BEFORE any
+  # apt operation, so the warning can never appear during this install.
+  _apt_sweep_legacy_disabled
 
   # ---- current components (union), ensure main+universe for the rewrite ----
   local comps_union="" e c s u

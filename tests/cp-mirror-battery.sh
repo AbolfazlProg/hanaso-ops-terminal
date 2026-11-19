@@ -414,14 +414,24 @@ EOF
   run_install "$LOGDIR/M8-install.log" "$M1"
   RC=$?; unset OPS_APT_EXTRA_UBUNTU_HOSTS
   chk_eq "M8-1-installer-rc" 0 "$RC"
-  step M8-2 "engine evidence: deb822 disabled + deb822 rewrite"
-  assert "M8-2-ubuntu-sources-disabled" test -f /etc/apt/sources.list.d/ubuntu.sources.disabled-by-ops-terminal
+  step M8-2 "engine evidence: deb822 original MOVED OUT of sources.list.d (v1.3.2) + deb822 rewrite"
+  # CP v1.3.2: the original ubuntu.sources must NOT remain in sources.list.d
+  # (neither active nor renamed with an invalid suffix — the invalid suffix is
+  # exactly what produced the real production warning
+  # "N: Ignoring file 'ubuntu.sources.disabled-by-ops-terminal'").
+  assert "M8-2-ubuntu-sources-gone-from-sourcesd" bash -c '! test -e /etc/apt/sources.list.d/ubuntu.sources && ! test -e /etc/apt/sources.list.d/ubuntu.sources.disabled-by-ops-terminal'
+  assert "M8-2-ubuntu-sources-preserved-backup" bash -c 'ls /var/backups/ops-terminal/*/apt-backup/disabled/ubuntu.sources >/dev/null 2>&1'
+  assert "M8-2-ubuntu-sources-byte-identical" bash -c 'grep -q "URIs: $MNU" /var/backups/ops-terminal/*/apt-backup/disabled/ubuntu.sources && grep -q "Types: deb" /var/backups/ops-terminal/*/apt-backup/disabled/ubuntu.sources'
+  assert "M8-2-no-invalid-suffix-files" bash -c '! ls /etc/apt/sources.list.d/*.disabled-by-ops-terminal >/dev/null 2>&1'
   assert "M8-2-engine-sources-written" test -f /etc/apt/sources.list.d/00-hanaso-mirror.sources
   assert "M8-2-deb822-shape" bash -c 'grep -q "^Types: deb" /etc/apt/sources.list.d/00-hanaso-mirror.sources && grep -q "^URIs: $M1" /etc/apt/sources.list.d/00-hanaso-mirror.sources'
   assert "M8-2-signed-by-pinned" bash -c 'grep -q "^Signed-By:" /etc/apt/sources.list.d/00-hanaso-mirror.sources'
   assert "M8-2-no-trusted-yes" bash -c '! grep -qE "trusted" /etc/apt/sources.list.d/00-hanaso-mirror.sources'
   assert "M8-2-components-include-universe" bash -c 'grep -q "Components: main universe" /etc/apt/sources.list.d/00-hanaso-mirror.sources'
   assert "M8-2-installed" bash -c 'dpkg -l nginx 2>/dev/null | grep -q "^ii" && dpkg -l certbot 2>/dev/null | grep -q "^ii"'
+  step M8-3 "real apt NEVER prints the 'Ignoring file' warning (v1.3.2 core fix)"
+  assert "M8-3-apt-no-ignoring-warning" bash -c 'out=$(apt-get update 2>&1 || true); printf "%s" "$out" | grep -qi "Ignoring file" && return 1 || return 0'
+  assert "M8-3-install-log-no-ignoring" bash -c '! grep -qi "Ignoring file" "$LOGDIR/M8-install.log"'
   ;;
 
 MA) # ---- natural regression: current config passes, full install + e2e -----
